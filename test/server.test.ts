@@ -246,7 +246,13 @@ test("compiler snapshots drive type definitions", async () => {
       uri,
       languageId: "abla",
       version: 3,
-      text: "class Widget {}\nfun make(): Widget = Widget()\n",
+      text: [
+        "class Widget {}",
+        "fun make(): Widget = Widget()",
+        "fun build(name: string, count: int): int = count",
+        'fun main: int = build("x", 2)',
+        "",
+      ].join("\n"),
     },
   });
   await compilerDiagnostics;
@@ -258,5 +264,17 @@ test("compiler snapshots drive type definitions", async () => {
     range: { start: { line: number; character: number } };
   }>;
   assert.deepEqual(locations[0]?.range.start, { line: 0, character: 6 });
+
+  const inlayHints = await client.request("textDocument/inlayHint", {
+    textDocument: { uri },
+    range: {
+      start: { line: 0, character: 0 },
+      end: { line: 4, character: 0 },
+    },
+  });
+  assert.deepEqual(
+    (inlayHints.result as Array<{ label: string }>).map((hint) => hint.label),
+    ["name:", "count:"],
+  );
   await client.stop();
 });

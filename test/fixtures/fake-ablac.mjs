@@ -31,6 +31,8 @@ input.on("line", (line) => {
             const widget = document.text.indexOf("Widget");
             const make = document.text.indexOf("make");
             const widgetCall = document.text.lastIndexOf("Widget");
+            const build = document.text.indexOf("build");
+            const buildCall = document.text.lastIndexOf("build");
             const symbols = [];
             const occurrences = [];
             if (widget >= 0) {
@@ -59,6 +61,32 @@ input.on("line", (line) => {
               occurrences.push({
                 name: "make", range: { start: make, end: make + 4 },
                 declarationId: `${document.uri}#make`, type: "Widget",
+              });
+            }
+            if (build >= 0) {
+              const buildId = `${document.uri}#build`;
+              symbols.push({
+                id: buildId, name: "build", kind: "function",
+                uri: document.uri, range: { start: build - 4, end: document.text.length },
+                selectionRange: { start: build, end: build + 5 },
+                detail: "fun int", topLevel: true,
+              });
+              for (const [parameter, name] of ["name", "count"].entries()) {
+                const start = document.text.indexOf(name, build + 5);
+                symbols.push({
+                  id: `${buildId}#${name}`, name, kind: "parameter",
+                  uri: document.uri, range: { start, end: start + name.length },
+                  selectionRange: { start, end: start + name.length },
+                  detail: "parameter", topLevel: false, containerId: buildId,
+                });
+              }
+              occurrences.push({
+                name: "build", range: { start: build, end: build + 5 },
+                declarationId: buildId, type: "int",
+              });
+              if (buildCall > build) occurrences.push({
+                name: "build", range: { start: buildCall, end: buildCall + 5 },
+                declarationId: buildId, type: "int",
               });
             }
             return {

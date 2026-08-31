@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   callContext,
+  callArgumentOffsets,
   foldingRanges,
   formatDocument,
   organizeImports,
@@ -17,6 +18,20 @@ test("signature context tracks nested calls and active arguments", () => {
     name: "format",
     activeParameter: 0,
   });
+});
+
+test("call arguments retain top-level offsets through nested syntax", () => {
+  const text = 'render(title, format(value, 2), { "comma, text" }, final)';
+  assert.deepEqual(
+    callArgumentOffsets(text, "render".length),
+    [
+      text.indexOf("title"),
+      text.indexOf("format"),
+      text.indexOf("{"),
+      text.indexOf("final"),
+    ],
+  );
+  assert.deepEqual(callArgumentOffsets("empty()", 5), []);
 });
 
 test("folding follows code braces without treating strings as blocks", () => {

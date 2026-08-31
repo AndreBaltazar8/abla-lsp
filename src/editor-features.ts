@@ -15,6 +15,76 @@ export interface CallContext {
   readonly activeParameter: number;
 }
 
+export function callArgumentOffsets(text: string, nameEnd: number): readonly number[] {
+  let cursor = nameEnd;
+  while (cursor < text.length && /\s/u.test(text[cursor] ?? "")) cursor += 1;
+  if (text[cursor] !== "(") return [];
+  cursor += 1;
+  while (cursor < text.length && /\s/u.test(text[cursor] ?? "")) cursor += 1;
+  if (text[cursor] === ")") return [];
+  const offsets: number[] = [cursor];
+  let parentheses = 0;
+  let brackets = 0;
+  let braces = 0;
+  let quoted = false;
+  let lineComment = false;
+  let blockComment = 0;
+  while (cursor < text.length) {
+    const character = text[cursor] ?? "";
+    const next = text[cursor + 1] ?? "";
+    if (lineComment) {
+      if (character === "\n") lineComment = false;
+      cursor += 1;
+      continue;
+    }
+    if (blockComment > 0) {
+      if (character === "/" && next === "*") {
+        blockComment += 1;
+        cursor += 2;
+      } else if (character === "*" && next === "/") {
+        blockComment -= 1;
+        cursor += 2;
+      } else cursor += 1;
+      continue;
+    }
+    if (!quoted && character === "/" && next === "/") {
+      lineComment = true;
+      cursor += 2;
+      continue;
+    }
+    if (!quoted && character === "/" && next === "*") {
+      blockComment = 1;
+      cursor += 2;
+      continue;
+    }
+    if (character === '"' && text[cursor - 1] !== "\\") {
+      quoted = !quoted;
+      cursor += 1;
+      continue;
+    }
+    if (quoted) {
+      cursor += 1;
+      continue;
+    }
+    if (character === "(") parentheses += 1;
+    else if (character === ")") {
+      if (parentheses === 0 && brackets === 0 && braces === 0) return offsets;
+      parentheses = Math.max(0, parentheses - 1);
+    } else if (character === "[") brackets += 1;
+    else if (character === "]") brackets = Math.max(0, brackets - 1);
+    else if (character === "{") braces += 1;
+    else if (character === "}") braces = Math.max(0, braces - 1);
+    else if (character === "," && parentheses === 0 && brackets === 0 && braces === 0) {
+      cursor += 1;
+      while (cursor < text.length && /\s/u.test(text[cursor] ?? "")) cursor += 1;
+      if (text[cursor] !== ")") offsets.push(cursor);
+      continue;
+    }
+    cursor += 1;
+  }
+  return [];
+}
+
 export function callContext(text: string, offset: number): CallContext | undefined {
   let cursor = Math.min(offset, text.length) - 1;
   let depth = 0;

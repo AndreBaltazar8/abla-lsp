@@ -13,6 +13,7 @@ import {
   ErrorCodes,
   InitializeParams,
   InitializeResult,
+  InlayHintKind,
   Location,
   ProposedFeatures,
   Range,
@@ -29,6 +30,7 @@ import {
   type CallHierarchyOutgoingCall,
   type CompletionItem,
   type Hover,
+  type InlayHint,
   type ReferenceParams,
   type RenameParams,
   type TextDocumentPositionParams,
@@ -39,6 +41,7 @@ import { CompilerClient } from "./compiler-client.js";
 import type { CompilerWorkspaceSnapshot } from "./compiler-protocol.js";
 import {
   ablaKeywords,
+  callArgumentOffsets,
   callContext,
   foldingRanges,
   formatDocument,
@@ -222,6 +225,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       },
       foldingRangeProvider: true,
       selectionRangeProvider: true,
+      inlayHintProvider: true,
       documentFormattingProvider: true,
       codeActionProvider: { codeActionKinds: [CodeActionKind.SourceOrganizeImports] },
       documentLinkProvider: { resolveProvider: false },
@@ -688,6 +692,61 @@ connection.onSelectionRanges((params) => {
       },
     };
   });
+});
+
+connection.languages.inlayHint.on((params) => {
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined || analysis.authority !== "compiler") return [];
+  const positions = new PositionMap(analysis.text);
+  const requestedStart = positions.offset(params.range.start);
+  const requestedEnd = positions.offset(params.range.end);
+  const hints: InlayHint[] = [];
+  for (const occurrence of analysis.occurrences) {
+    if (
+      occurrence.declarationId === undefined ||
+      occurrence.range.end < requestedStart ||
+      occurrence.range.start > requestedEnd
+    ) continue;
+    const target = index.symbolById(occurrence.declarationId);
+    if (
+      target === undefined ||
+      (target.symbol.kind !== "function" && target.symbol.kind !== "class")
+    ) continue;
+    if (
+      target.symbol.uri === analysis.uri &&
+      target.symbol.selectionRange.start === occurrence.range.start &&
+      target.symbol.selectionRange.end === occurrence.range.end
+    ) continue;
+    const parameters = target.analysis.symbols
+      .filter((symbol) =>
+        symbol.containerId === target.symbol.id &&
+        (symbol.kind === "parameter" || symbol.kind === "property"),
+      )
+      .sort((left, right) => left.selectionRange.start - right.selectionRange.start);
+    if (parameters.length === 0) continue;
+    const arguments_ = callArgumentOffsets(analysis.text, occurrence.range.end);
+    for (
+      let argument = 0;
+      argument < arguments_.length && argument < parameters.length;
+      argument += 1
+    ) {
+      const offset = arguments_[argument];
+      const parameter = parameters[argument];
+      if (offset === undefined || parameter === undefined) continue;
+      const following = analysis.text.slice(offset, offset + parameter.name.length + 2);
+      if (
+        following.startsWith(`${parameter.name}:`) ||
+        following.startsWith(`${parameter.name} =`)
+      ) continue;
+      hints.push({
+        position: positions.position(offset),
+        label: `${parameter.name}:`,
+        kind: InlayHintKind.Parameter,
+        paddingRight: true,
+      });
+    }
+  }
+  return hints;
 });
 
 connection.onDocumentFormatting((params) => {
