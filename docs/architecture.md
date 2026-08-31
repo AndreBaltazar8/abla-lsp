@@ -42,6 +42,14 @@ engine preserves the requested order and attached line comments, repairs
 relative imports in both directions, rejects cycles locally, and asks the
 compiler to reject new diagnostics or changes to symbols in untouched files.
 
+The same planner owns signature edits, extraction, inline, receiver
+conversion, ownership migration, generation, promotion, dead-code removal,
+and compound recipes. Plans use source offsets internally, reject conflicting
+or overlapping edits, convert to LSP positions only at the boundary, and go
+through the same prospective compiler validation. A recipe is atomic but does
+not pretend later operations can resolve identities created by earlier edits;
+those dependent stages require a new compiler snapshot.
+
 ## Degraded mode
 
 The built-in scanner exists only to keep protocol lifecycle, basic symbols,
