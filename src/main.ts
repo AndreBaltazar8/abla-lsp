@@ -86,7 +86,7 @@ function publishDiagnostics(analysis: DocumentAnalysis): void {
     version: analysis.version,
     diagnostics: analysis.diagnostics.map((diagnostic) => ({
       severity: DiagnosticSeverity.Error,
-      source: "abla-syntax",
+      source: analysis.authority === "compiler" ? "ablac" : "abla-syntax",
       code: diagnostic.code,
       message: diagnostic.message,
       range: positions.range(diagnostic.range),

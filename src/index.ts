@@ -71,9 +71,13 @@ export class WorkspaceIndex {
   references(resolved: ResolvedSymbol): ReadonlyMap<string, readonly AblaOccurrence[]> {
     const result = new Map<string, AblaOccurrence[]>();
     if (!this.#uniquelyResolvable(resolved.symbol)) return result;
+    const canonical = resolved.analysis.authority === "compiler";
     for (const analysis of this.#documents.values()) {
       const matches = analysis.occurrences.filter(
-        (occurrence) => occurrence.name === resolved.symbol.name,
+        (occurrence) =>
+          canonical
+            ? occurrence.declarationId === resolved.symbol.id
+            : occurrence.name === resolved.symbol.name,
       );
       if (matches.length > 0) result.set(analysis.uri, matches);
     }
@@ -83,6 +87,18 @@ export class WorkspaceIndex {
   prepareRename(uri: string, position: Position): ResolvedSymbol | undefined {
     const resolved = this.resolve(uri, position);
     if (resolved === undefined || !this.#uniquelyResolvable(resolved.symbol)) {
+      return undefined;
+    }
+    if (
+      resolved.analysis.authority === "compiler" &&
+      this.documents().some((analysis) =>
+        analysis.occurrences.some(
+          (occurrence) =>
+            occurrence.name === resolved.symbol.name &&
+            occurrence.declarationId === undefined,
+        ),
+      )
+    ) {
       return undefined;
     }
     return resolved;
@@ -165,10 +181,14 @@ export class WorkspaceIndex {
     occurrence: AblaOccurrence,
   ): ResolvedSymbol | undefined {
     if (occurrence.declarationId !== undefined) {
-      const declaration = analysis.symbols.find(
-        (symbol) => symbol.id === occurrence.declarationId,
-      );
-      if (declaration !== undefined) return { symbol: declaration, analysis };
+      for (const candidate of this.#documents.values()) {
+        const declaration = candidate.symbols.find(
+          (symbol) => symbol.id === occurrence.declarationId,
+        );
+        if (declaration !== undefined) {
+          return { symbol: declaration, analysis: candidate };
+        }
+      }
     }
     const local = analysis.symbols.filter((symbol) => symbol.name === occurrence.name);
     if (local.length === 1 && local[0] !== undefined) {
@@ -184,6 +204,8 @@ export class WorkspaceIndex {
   }
 
   #uniquelyResolvable(symbol: AblaSymbol): boolean {
+    const declaration = this.#documents.get(symbol.uri);
+    if (declaration?.authority === "compiler") return true;
     if (!symbol.topLevel) {
       const owner = symbol.containerId;
       return (

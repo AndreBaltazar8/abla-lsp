@@ -77,3 +77,101 @@ test("syntax-only rename refuses ambiguous declarations", () => {
     reason: "syntax-only analysis cannot prove that this symbol is unambiguous",
   });
 });
+
+test("compiler references use canonical ids even when names collide", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  index.upsertAnalysis({
+    authority: "compiler",
+    uri: "file:///workspace/one.ab",
+    version: 1,
+    text: "fun run: int = 1\n",
+    symbols: [{
+      id: "abla:one:run",
+      name: "run",
+      kind: "function",
+      uri: "file:///workspace/one.ab",
+      range: { start: 0, end: 16 },
+      selectionRange: { start: 4, end: 7 },
+      detail: "fun int",
+      topLevel: true,
+    }],
+    occurrences: [
+      { name: "run", range: { start: 4, end: 7 }, declarationId: "abla:one:run" },
+    ],
+    diagnostics: [],
+  });
+  index.upsertAnalysis({
+    authority: "compiler",
+    uri: "file:///workspace/two.ab",
+    version: 1,
+    text: "fun run: int = 2\n",
+    symbols: [{
+      id: "abla:two:run",
+      name: "run",
+      kind: "function",
+      uri: "file:///workspace/two.ab",
+      range: { start: 0, end: 16 },
+      selectionRange: { start: 4, end: 7 },
+      detail: "fun int",
+      topLevel: true,
+    }],
+    occurrences: [
+      { name: "run", range: { start: 4, end: 7 }, declarationId: "abla:two:run" },
+    ],
+    diagnostics: [],
+  });
+  const caller = "fun main: int = run()\n";
+  index.upsertAnalysis({
+    authority: "compiler",
+    uri: "file:///workspace/main.ab",
+    version: 1,
+    text: caller,
+    symbols: [],
+    occurrences: [
+      { name: "run", range: { start: 16, end: 19 }, declarationId: "abla:one:run" },
+    ],
+    diagnostics: [],
+  });
+
+  const result = index.rename({
+    uri: "file:///workspace/main.ab",
+    position: { line: 0, character: 17 },
+    newName: "execute",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.edit.changes?.["file:///workspace/one.ab"]?.length, 1);
+  assert.equal(result.edit.changes?.["file:///workspace/main.ab"]?.length, 1);
+  assert.equal(result.edit.changes?.["file:///workspace/two.ab"], undefined);
+});
+
+test("compiler rename refuses incomplete reference coverage", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  index.upsertAnalysis({
+    authority: "compiler",
+    uri: "file:///workspace/main.ab",
+    version: 1,
+    text: "fun run: int = 1\nval callback = run\n",
+    symbols: [{
+      id: "abla:run",
+      name: "run",
+      kind: "function",
+      uri: "file:///workspace/main.ab",
+      range: { start: 0, end: 16 },
+      selectionRange: { start: 4, end: 7 },
+      detail: "fun int",
+      topLevel: true,
+    }],
+    occurrences: [
+      { name: "run", range: { start: 4, end: 7 }, declarationId: "abla:run" },
+      { name: "run", range: { start: 32, end: 35 } },
+    ],
+    diagnostics: [],
+  });
+  const result = index.rename({
+    uri: "file:///workspace/main.ab",
+    position: { line: 0, character: 5 },
+    newName: "execute",
+  });
+  assert.equal(result.ok, false);
+});

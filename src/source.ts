@@ -322,6 +322,6 @@ export function identifierAt(
   offset: number,
 ): AblaOccurrence | undefined {
   return analysis.occurrences.find(
-    (occurrence) => occurrence.range.start <= offset && offset <= occurrence.range.end,
+    (occurrence) => occurrence.range.start <= offset && offset < occurrence.range.end,
   );
 }
