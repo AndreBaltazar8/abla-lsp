@@ -15,6 +15,7 @@ import {
   type CompilerValidateEditResult,
   type CompilerWorkspaceSnapshot,
 } from "./compiler-protocol.js";
+import { normalizeCompilerSnapshot } from "./encoding.js";
 
 interface PendingRequest {
   readonly resolve: (value: unknown) => void;
@@ -93,18 +94,30 @@ export class CompilerClient {
     return this.request<void>("document/close", params, signal);
   }
 
-  analyze(
+  async analyze(
     params: CompilerAnalyzeParams = {},
     signal?: AbortSignal,
   ): Promise<CompilerWorkspaceSnapshot> {
-    return this.request<CompilerWorkspaceSnapshot>("analyze", params, signal);
+    const snapshot = await this.request<CompilerWorkspaceSnapshot>(
+      "analyze",
+      params,
+      signal,
+    );
+    return normalizeCompilerSnapshot(snapshot);
   }
 
-  validate(
+  async validate(
     params: CompilerValidateEditParams,
     signal?: AbortSignal,
   ): Promise<CompilerValidateEditResult> {
-    return this.request<CompilerValidateEditResult>("refactor/validate", params, signal);
+    const result = await this.request<CompilerValidateEditResult>(
+      "refactor/validate",
+      params,
+      signal,
+    );
+    return result.snapshot === undefined
+      ? result
+      : { ...result, snapshot: normalizeCompilerSnapshot(result.snapshot) };
   }
 
   async stop(): Promise<void> {
