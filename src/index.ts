@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Position, TextEdit, WorkspaceEdit } from "vscode-languageserver/node";
 import type { AblaOccurrence, AblaSymbol, Analyzer, DocumentAnalysis } from "./model.js";
 import { PositionMap } from "./positions.js";
@@ -16,6 +18,11 @@ export interface RenameRequest {
   readonly uri: string;
   readonly position: Position;
   readonly newName: string;
+}
+
+export interface MoveDeclarationsRequest {
+  readonly symbolIds: readonly string[];
+  readonly targetUri: string;
 }
 
 const validIdentifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -237,6 +244,138 @@ export class WorkspaceIndex {
     return { ok: true, edit: { changes } };
   }
 
+  moveDeclarations(request: MoveDeclarationsRequest): EditResult {
+    if (request.symbolIds.length === 0) {
+      return { ok: false, reason: "move requires at least one declaration" };
+    }
+    const target = this.#documents.get(request.targetUri);
+    if (target === undefined || target.authority !== "compiler") {
+      return { ok: false, reason: "the target must be an analyzed Abla document" };
+    }
+    const selected: ResolvedSymbol[] = [];
+    const seen = new Set<string>();
+    for (const id of request.symbolIds) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const resolved = this.symbolById(id);
+      if (
+        resolved === undefined ||
+        resolved.analysis.authority !== "compiler" ||
+        !resolved.symbol.topLevel
+      ) {
+        return { ok: false, reason: "only compiler-resolved top-level declarations can move" };
+      }
+      if (resolved.symbol.uri === request.targetUri) {
+        return { ok: false, reason: "a selected declaration is already in the target file" };
+      }
+      selected.push(resolved);
+    }
+
+    const snippets: string[] = [];
+    const changes: Record<string, TextEdit[]> = {};
+    const movedIds = new Set(selected.map((resolved) => resolved.symbol.id));
+    const movedRanges = new Map<string, Array<{ start: number; end: number }>>();
+    for (const resolved of selected) {
+      const attachedStart = this.#attachedCommentStart(
+        resolved.analysis.text,
+        resolved.symbol.range.start,
+      );
+      const range = { start: attachedStart, end: resolved.symbol.range.end };
+      snippets.push(resolved.analysis.text.slice(range.start, range.end).trimEnd());
+      const ranges = movedRanges.get(resolved.symbol.uri) ?? [];
+      ranges.push(range);
+      movedRanges.set(resolved.symbol.uri, ranges);
+      const positions = new PositionMap(resolved.analysis.text);
+      const edits = changes[resolved.symbol.uri] ?? [];
+      edits.push({ range: positions.range(range), newText: "" });
+      changes[resolved.symbol.uri] = edits;
+    }
+
+    for (const [uri, edits] of Object.entries(changes)) {
+      const sorted = edits.sort((left, right) => {
+        if (left.range.start.line !== right.range.start.line) {
+          return right.range.start.line - left.range.start.line;
+        }
+        return right.range.start.character - left.range.start.character;
+      });
+      for (let index = 1; index < sorted.length; index += 1) {
+        const later = sorted[index - 1];
+        const earlier = sorted[index];
+        if (
+          later !== undefined &&
+          earlier !== undefined &&
+          (earlier.range.end.line > later.range.start.line ||
+            (earlier.range.end.line === later.range.start.line &&
+              earlier.range.end.character > later.range.start.character))
+        ) {
+          return { ok: false, reason: `move ranges overlap in ${uri}` };
+        }
+      }
+    }
+
+    const targetPositions = new PositionMap(target.text);
+    const prefix = target.text.length === 0 || target.text.endsWith("\n\n")
+      ? ""
+      : target.text.endsWith("\n") ? "\n" : "\n\n";
+    const suffix = target.text.length === 0 ? "\n" : "\n";
+    const targetEdits = changes[request.targetUri] ?? [];
+    targetEdits.push({
+      range: targetPositions.range({ start: target.text.length, end: target.text.length }),
+      newText: `${prefix}${snippets.join("\n\n")}${suffix}`,
+    });
+    changes[request.targetUri] = targetEdits;
+
+    const imports = new Map<string, Set<string>>();
+    const requireImport = (fromUri: string, importedUri: string): void => {
+      if (fromUri === importedUri) return;
+      const targets = imports.get(fromUri) ?? new Set<string>();
+      targets.add(importedUri);
+      imports.set(fromUri, targets);
+    };
+    for (const resolved of selected) {
+      for (const occurrence of resolved.analysis.occurrences) {
+        if (
+          occurrence.declarationId === undefined ||
+          movedIds.has(occurrence.declarationId) ||
+          occurrence.range.start < resolved.symbol.range.start ||
+          occurrence.range.end > resolved.symbol.range.end
+        ) continue;
+        const dependency = this.symbolById(occurrence.declarationId);
+        if (dependency !== undefined) requireImport(request.targetUri, dependency.symbol.uri);
+      }
+    }
+    for (const analysis of this.#documents.values()) {
+      for (const occurrence of analysis.occurrences) {
+        if (occurrence.declarationId === undefined || !movedIds.has(occurrence.declarationId)) {
+          continue;
+        }
+        const removed = (movedRanges.get(analysis.uri) ?? []).some(
+          (range) => range.start <= occurrence.range.start && occurrence.range.end <= range.end,
+        );
+        if (!removed) requireImport(analysis.uri, request.targetUri);
+      }
+    }
+    if (this.#importGraphHasCycle(imports)) {
+      return { ok: false, reason: "move would introduce an import cycle" };
+    }
+    for (const [uri, importedUris] of imports) {
+      const analysis = this.#documents.get(uri);
+      if (analysis === undefined) continue;
+      const requested = [...importedUris]
+        .map((importedUri) => this.#relativeImport(uri, importedUri))
+        .filter((value): value is string => value !== undefined)
+        .filter((value) => !analysis.text.includes(`import "${value}"`))
+        .sort((left, right) => left.localeCompare(right));
+      if (requested.length === 0) continue;
+      const importEdit: TextEdit = {
+        range: new PositionMap(analysis.text).range({ start: 0, end: 0 }),
+        newText: `${requested.map((value) => `import "${value}"`).join("\n")}\n`,
+      };
+      changes[uri] = [...(changes[uri] ?? []), importEdit];
+    }
+    return { ok: true, edit: { changes } };
+  }
+
   #resolveOccurrence(
     analysis: DocumentAnalysis,
     occurrence: AblaOccurrence,
@@ -285,5 +424,67 @@ export class WorkspaceIndex {
   #sameNamespace(left: AblaSymbol, right: AblaSymbol): boolean {
     if (left.topLevel || right.topLevel) return left.topLevel && right.topLevel;
     return left.containerId !== undefined && left.containerId === right.containerId;
+  }
+
+  #attachedCommentStart(text: string, declarationStart: number): number {
+    let start = text.lastIndexOf("\n", Math.max(0, declarationStart - 1)) + 1;
+    let cursor = start;
+    while (cursor > 0) {
+      const previousEnd = cursor - 1;
+      const previousStart = text.lastIndexOf("\n", Math.max(0, previousEnd - 1)) + 1;
+      const line = text.slice(previousStart, previousEnd).trim();
+      if (!line.startsWith("//")) break;
+      start = previousStart;
+      cursor = previousStart;
+    }
+    return start;
+  }
+
+  #relativeImport(fromUri: string, importedUri: string): string | undefined {
+    try {
+      const from = fileURLToPath(fromUri);
+      const imported = fileURLToPath(importedUri);
+      return path.relative(path.dirname(from), imported).replaceAll(path.sep, "/");
+    } catch {
+      return undefined;
+    }
+  }
+
+  #importGraphHasCycle(additions: ReadonlyMap<string, ReadonlySet<string>>): boolean {
+    const graph = new Map<string, Set<string>>();
+    for (const analysis of this.#documents.values()) {
+      const edges = graph.get(analysis.uri) ?? new Set<string>();
+      const imports = /^\s*import\s+(?:contract\s+)?"([^"\r\n]+)"/gmu;
+      for (const match of analysis.text.matchAll(imports)) {
+        const requested = match[1];
+        if (requested === undefined || requested.startsWith("abla/")) continue;
+        try {
+          const importer = fileURLToPath(analysis.uri);
+          const imported = path.resolve(path.dirname(importer), requested);
+          edges.add(pathToFileURL(imported).href);
+        } catch {
+          // Non-file documents do not participate in the filesystem import graph.
+        }
+      }
+      graph.set(analysis.uri, edges);
+    }
+    for (const [uri, targets] of additions) {
+      const edges = graph.get(uri) ?? new Set<string>();
+      for (const target of targets) edges.add(target);
+      graph.set(uri, edges);
+    }
+    const state = new Map<string, 0 | 1 | 2>();
+    const visits = (uri: string): boolean => {
+      const current = state.get(uri) ?? 0;
+      if (current === 1) return true;
+      if (current === 2) return false;
+      state.set(uri, 1);
+      for (const target of graph.get(uri) ?? []) {
+        if (graph.has(target) && visits(target)) return true;
+      }
+      state.set(uri, 2);
+      return false;
+    };
+    return [...graph.keys()].some((uri) => visits(uri));
   }
 }

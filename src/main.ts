@@ -45,7 +45,7 @@ import {
   symbolSignature,
 } from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
-import { WorkspaceIndex, type RenameRequest } from "./index.js";
+import { WorkspaceIndex, type EditResult, type RenameRequest } from "./index.js";
 import { PositionMap } from "./positions.js";
 import { SyntaxAnalyzer } from "./source.js";
 import { indexWorkspace } from "./workspace.js";
@@ -60,6 +60,7 @@ let compilerConfiguration: {
   readonly arguments?: readonly string[];
 } = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac" };
 let compiler: CompilerClient | undefined;
+let compilerRevision: string | undefined;
 let compilerAnalysis: AbortController | undefined;
 let compilerAnalysisTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -220,7 +221,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       callHierarchyProvider: true,
       renameProvider: { prepareProvider: true },
       executeCommandProvider: {
-        commands: ["abla.renameSymbols"],
+        commands: ["abla.renameSymbols", "abla.moveDeclarations"],
       },
       experimental: {
         abla: {
@@ -282,6 +283,7 @@ async function startCompiler(): Promise<void> {
 }
 
 function acceptCompilerSnapshot(snapshot: CompilerWorkspaceSnapshot): void {
+  compilerRevision = snapshot.revision;
   for (const document of snapshot.documents) {
     const analysis: DocumentAnalysis = {
       authority: "compiler",
@@ -294,6 +296,48 @@ function acceptCompilerSnapshot(snapshot: CompilerWorkspaceSnapshot): void {
     };
     index.upsertAnalysis(analysis);
     if (documents.get(document.uri) !== undefined) publishDiagnostics(analysis);
+  }
+}
+
+async function validateCompilerEdit(edit: WorkspaceEdit): Promise<void> {
+  const active = compiler;
+  const baseRevision = compilerRevision;
+  const changes = edit.changes ?? {};
+  const compilerOwned = Object.keys(changes).some(
+    (uri) => index.document(uri)?.authority === "compiler",
+  );
+  if (!compilerOwned) return;
+  if (active === undefined || baseRevision === undefined) {
+    throw new ResponseError(
+      ErrorCodes.ServerNotInitialized,
+      "compiler validation is unavailable for this semantic refactor",
+    );
+  }
+  const edits = Object.entries(changes).flatMap(([uri, documentEdits]) => {
+    const analysis = index.document(uri);
+    if (analysis === undefined) return [];
+    const positions = new PositionMap(analysis.text);
+    return documentEdits.map((documentEdit) => {
+      const start = positions.offset(documentEdit.range.start);
+      const end = positions.offset(documentEdit.range.end);
+      return {
+        uri,
+        start: Buffer.byteLength(analysis.text.slice(0, start), "utf8"),
+        end: Buffer.byteLength(analysis.text.slice(0, end), "utf8"),
+        newText: documentEdit.newText,
+      };
+    });
+  });
+  const validated = await active.validate({
+    baseRevision,
+    edits,
+    invariants: ["no-new-errors", "preserve-unedited-symbols"],
+  });
+  if (!validated.valid) {
+    throw new ResponseError(
+      ErrorCodes.InvalidRequest,
+      validated.reason ?? "the compiler rejected the prospective refactor",
+    );
   }
 }
 
@@ -683,24 +727,43 @@ connection.onPrepareRename((params: TextDocumentPositionParams): Range | null =>
   return new PositionMap(resolved.analysis.text).range(resolved.symbol.selectionRange);
 });
 
-connection.onRenameRequest((params: RenameParams): WorkspaceEdit => {
+connection.onRenameRequest(async (params: RenameParams): Promise<WorkspaceEdit> => {
   const result = index.rename({
     uri: params.textDocument.uri,
     position: params.position,
     newName: params.newName,
   });
   if (!result.ok) throw new ResponseError(ErrorCodes.InvalidRequest, result.reason);
+  await validateCompilerEdit(result.edit);
   return result.edit;
 });
 
 connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
-  if (params.command !== "abla.renameSymbols") return null;
-  const argument = params.arguments?.[0] as
-    | { readonly renames?: readonly RenameRequest[]; readonly apply?: boolean }
-    | undefined;
-  const result = index.bulkRename(argument?.renames ?? []);
+  let apply = false;
+  let result: EditResult;
+  if (params.command === "abla.renameSymbols") {
+    const argument = params.arguments?.[0] as
+      | { readonly renames?: readonly RenameRequest[]; readonly apply?: boolean }
+      | undefined;
+    apply = argument?.apply === true;
+    result = index.bulkRename(argument?.renames ?? []);
+  } else if (params.command === "abla.moveDeclarations") {
+    const argument = params.arguments?.[0] as
+      | {
+          readonly symbolIds?: readonly string[];
+          readonly targetUri?: string;
+          readonly apply?: boolean;
+        }
+      | undefined;
+    apply = argument?.apply === true;
+    result = index.moveDeclarations({
+      symbolIds: argument?.symbolIds ?? [],
+      targetUri: argument?.targetUri ?? "",
+    });
+  } else return null;
   if (!result.ok) throw new ResponseError(ErrorCodes.InvalidRequest, result.reason);
-  if (argument?.apply === true) {
+  await validateCompilerEdit(result.edit);
+  if (apply) {
     const applied = await connection.workspace.applyEdit(result.edit);
     if (!applied.applied) {
       throw new ResponseError(
@@ -717,6 +780,7 @@ connection.onShutdown(async () => {
   compilerAnalysis?.abort(new Error("language server is shutting down"));
   await compiler?.stop();
   compiler = undefined;
+  compilerRevision = undefined;
 });
 
 documents.listen(connection);

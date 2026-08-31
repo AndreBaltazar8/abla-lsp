@@ -191,3 +191,76 @@ test("bulk rename supports atomic symbol swaps", () => {
   assert.equal(edits.length, 3);
   assert.deepEqual(new Set(edits.map((edit) => edit.newText)), new Set(["alpha", "beta"]));
 });
+
+test("multi-declaration move preserves attached comments and requested order", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const sourceUri = "file:///workspace/source.ab";
+  const targetUri = "file:///workspace/target.ab";
+  const source = "// Alpha docs\nfun alpha: int = 1\n\nfun beta: int = 2\n\nfun caller: int = alpha()\n";
+  const syntax = new SyntaxAnalyzer().analyze(sourceUri, 1, source);
+  const alpha = syntax.symbols.find((symbol) => symbol.name === "alpha");
+  index.upsertAnalysis({
+    ...syntax,
+    authority: "compiler",
+    occurrences: syntax.occurrences.map((occurrence) =>
+      occurrence.name === "alpha" && alpha !== undefined
+        ? { ...occurrence, declarationId: alpha.id }
+        : occurrence,
+    ),
+  });
+  const targetSyntax = new SyntaxAnalyzer().analyze(targetUri, 1, "fun existing: int = 0\n");
+  index.upsertAnalysis({ ...targetSyntax, authority: "compiler" });
+  const beta = syntax.symbols.find((symbol) => symbol.name === "beta");
+  assert.notEqual(alpha, undefined);
+  assert.notEqual(beta, undefined);
+  const result = index.moveDeclarations({
+    symbolIds: [beta?.id ?? "", alpha?.id ?? ""],
+    targetUri,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.edit.changes?.[sourceUri]?.length, 3);
+  assert.ok(
+    result.edit.changes?.[sourceUri]?.some(
+      (edit) => edit.newText === 'import "target.ab"\n',
+    ),
+  );
+  const insertion = result.edit.changes?.[targetUri]?.[0]?.newText ?? "";
+  assert.ok(insertion.indexOf("fun beta") < insertion.indexOf("// Alpha docs"));
+  assert.match(insertion, /\/\/ Alpha docs\nfun alpha/);
+});
+
+test("declaration move rejects a newly introduced import cycle", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const sourceUri = "file:///workspace/source.ab";
+  const targetUri = "file:///workspace/target.ab";
+  const source = [
+    "fun helper: int = 1",
+    "fun alpha: int = helper()",
+    "fun caller: int = alpha()",
+    "",
+  ].join("\n");
+  const syntax = new SyntaxAnalyzer().analyze(sourceUri, 1, source);
+  const helper = syntax.symbols.find((symbol) => symbol.name === "helper");
+  const alpha = syntax.symbols.find((symbol) => symbol.name === "alpha");
+  index.upsertAnalysis({
+    ...syntax,
+    authority: "compiler",
+    occurrences: syntax.occurrences.map((occurrence) => {
+      if (occurrence.name === "helper" && helper !== undefined) {
+        return { ...occurrence, declarationId: helper.id };
+      }
+      if (occurrence.name === "alpha" && alpha !== undefined) {
+        return { ...occurrence, declarationId: alpha.id };
+      }
+      return occurrence;
+    }),
+  });
+  const target = new SyntaxAnalyzer().analyze(targetUri, 1, "fun existing: int = 0\n");
+  index.upsertAnalysis({ ...target, authority: "compiler" });
+  const result = index.moveDeclarations({
+    symbolIds: [alpha?.id ?? ""],
+    targetUri,
+  });
+  assert.deepEqual(result, { ok: false, reason: "move would introduce an import cycle" });
+});
