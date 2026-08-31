@@ -133,3 +133,29 @@ export function formatDocument(text: string): TextEdit[] {
     newText: formatted,
   }];
 }
+
+export function organizeImports(text: string): TextEdit | undefined {
+  const lines = text.split("\n");
+  let first = 0;
+  while (first < lines.length && (lines[first]?.trim() === "" || lines[first]?.trimStart().startsWith("//"))) {
+    first += 1;
+  }
+  let last = first;
+  while (last < lines.length && /^\s*import\s+/.test(lines[last] ?? "")) last += 1;
+  if (last - first < 2) return undefined;
+  const sorted = [...new Set(lines.slice(first, last).map((line) => line.trim()))].sort(
+    (left, right) => left.localeCompare(right),
+  );
+  const original = lines.slice(first, last);
+  if (sorted.length === original.length && sorted.every((line, index) => line === original[index])) {
+    return undefined;
+  }
+  const before = lines.slice(0, first).join("\n");
+  const startOffset = before === "" ? 0 : before.length + 1;
+  const oldText = original.join("\n");
+  const positions = new PositionMap(text);
+  return {
+    range: positions.range({ start: startOffset, end: startOffset + oldText.length }),
+    newText: sorted.join("\n"),
+  };
+}

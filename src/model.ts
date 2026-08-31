@@ -8,7 +8,11 @@ export interface OffsetRange {
 export type AblaSymbolKind =
   | "function"
   | "class"
+  | "interface"
   | "enum"
+  | "type"
+  | "parameter"
+  | "property"
   | "value"
   | "variable";
 
@@ -28,6 +32,7 @@ export interface AblaOccurrence {
   readonly name: string;
   readonly range: OffsetRange;
   readonly declarationId?: string;
+  readonly type?: string;
 }
 
 export interface AblaDiagnostic {

@@ -175,3 +175,19 @@ test("compiler rename refuses incomplete reference coverage", () => {
   });
   assert.equal(result.ok, false);
 });
+
+test("bulk rename supports atomic symbol swaps", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const text = "fun alpha: int = beta()\nfun beta: int = 1\n";
+  const uri = "file:///workspace/swap.ab";
+  index.upsert(uri, 1, text);
+  const result = index.bulkRename([
+    { uri, position: { line: 0, character: 5 }, newName: "beta" },
+    { uri, position: { line: 1, character: 5 }, newName: "alpha" },
+  ]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const edits = result.edit.changes?.[uri] ?? [];
+  assert.equal(edits.length, 3);
+  assert.deepEqual(new Set(edits.map((edit) => edit.newText)), new Set(["alpha", "beta"]));
+});

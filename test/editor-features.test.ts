@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { callContext, foldingRanges, formatDocument } from "../src/editor-features.js";
+import {
+  callContext,
+  foldingRanges,
+  formatDocument,
+  organizeImports,
+} from "../src/editor-features.js";
 
 test("signature context tracks nested calls and active arguments", () => {
   const text = "render(title, format(value, 2), ";
@@ -35,4 +40,10 @@ test("safe formatting trims line endings and supplies one final newline", () => 
   assert.equal(edits.length, 1);
   assert.equal(edits[0]?.newText, "fun main: int = 0\n");
   assert.deepEqual(formatDocument("fun main: int = 0\n"), []);
+});
+
+test("import organization sorts and deduplicates the leading import block", () => {
+  const text = 'import "z.ab"\nimport "a.ab"\nimport "z.ab"\n\nfun main: int = 0\n';
+  const edit = organizeImports(text);
+  assert.equal(edit?.newText, 'import "a.ab"\nimport "z.ab"');
 });

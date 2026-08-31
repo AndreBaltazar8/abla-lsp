@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { promises as fs } from "node:fs";
-import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  CodeActionKind,
   createConnection,
   CompletionItemKind,
   DiagnosticSeverity,
@@ -39,6 +41,7 @@ import {
   callContext,
   foldingRanges,
   formatDocument,
+  organizeImports,
   symbolSignature,
 } from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
@@ -74,8 +77,16 @@ function symbolKind(symbol: AblaSymbol): SymbolKind {
       return SymbolKind.Function;
     case "class":
       return SymbolKind.Class;
+    case "interface":
+      return SymbolKind.Interface;
     case "enum":
       return SymbolKind.Enum;
+    case "type":
+      return SymbolKind.TypeParameter;
+    case "parameter":
+      return SymbolKind.Variable;
+    case "property":
+      return SymbolKind.Property;
     case "value":
       return SymbolKind.Constant;
     case "variable":
@@ -89,8 +100,16 @@ function completionKind(symbol: AblaSymbol): CompletionItemKind {
       return CompletionItemKind.Function;
     case "class":
       return CompletionItemKind.Class;
+    case "interface":
+      return CompletionItemKind.Interface;
     case "enum":
       return CompletionItemKind.Enum;
+    case "type":
+      return CompletionItemKind.TypeParameter;
+    case "parameter":
+      return CompletionItemKind.Variable;
+    case "property":
+      return CompletionItemKind.Property;
     case "value":
       return CompletionItemKind.Constant;
     case "variable":
@@ -104,8 +123,16 @@ function semanticTokenType(symbol: AblaSymbol): number {
       return 0;
     case "class":
       return 1;
+    case "interface":
+      return 1;
     case "enum":
       return 2;
+    case "type":
+      return 1;
+    case "parameter":
+      return 5;
+    case "property":
+      return 4;
     case "value":
     case "variable":
       return 3;
@@ -180,7 +207,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       signatureHelpProvider: { triggerCharacters: ["(", ","] },
       semanticTokensProvider: {
         legend: {
-          tokenTypes: ["function", "class", "enum", "variable", "property"],
+          tokenTypes: ["function", "class", "enum", "variable", "property", "parameter"],
           tokenModifiers: ["declaration", "readonly"],
         },
         full: true,
@@ -188,6 +215,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       foldingRangeProvider: true,
       selectionRangeProvider: true,
       documentFormattingProvider: true,
+      codeActionProvider: { codeActionKinds: [CodeActionKind.SourceOrganizeImports] },
+      documentLinkProvider: { resolveProvider: false },
       callHierarchyProvider: true,
       renameProvider: { prepareProvider: true },
       executeCommandProvider: {
@@ -397,13 +426,21 @@ connection.onReferences((params: ReferenceParams): Location[] => {
 connection.onHover((params: TextDocumentPositionParams): Hover | null => {
   const resolved = index.resolve(params.textDocument.uri, params.position);
   if (resolved === undefined) return null;
-  const positions = new PositionMap(resolved.analysis.text);
+  const source = index.document(params.textDocument.uri);
+  if (source === undefined) return null;
+  const positions = new PositionMap(source.text);
+  const offset = positions.offset(params.position);
+  const occurrence = source.occurrences.find(
+    (candidate) => candidate.range.start <= offset && offset < candidate.range.end,
+  );
+  const signature = symbolSignature(resolved.analysis, resolved.symbol);
+  const type = occurrence?.type === undefined ? "" : `\n\nType: \`${occurrence.type}\``;
   return {
     contents: {
       kind: "markdown",
-      value: `\`${resolved.symbol.detail} ${resolved.symbol.name}\`\n\nAnalysis: **${resolved.analysis.authority}**`,
+      value: `\`${signature}\`${type}\n\nAnalysis: **${resolved.analysis.authority}**`,
     },
-    range: positions.range(resolved.symbol.selectionRange),
+    ...(occurrence === undefined ? {} : { range: positions.range(occurrence.range) }),
   };
 });
 
@@ -530,6 +567,52 @@ connection.onSelectionRanges((params) => {
 connection.onDocumentFormatting((params) => {
   const analysis = index.document(params.textDocument.uri);
   return analysis === undefined ? [] : formatDocument(analysis.text);
+});
+
+connection.onCodeAction((params) => {
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined) return [];
+  const actions = [];
+  if (
+    params.context.only === undefined ||
+    params.context.only.some((kind) => CodeActionKind.SourceOrganizeImports.startsWith(kind))
+  ) {
+    const edit = organizeImports(analysis.text);
+    if (edit !== undefined) {
+      actions.push({
+        title: "Organize Abla imports",
+        kind: CodeActionKind.SourceOrganizeImports,
+        edit: { changes: { [analysis.uri]: [edit] } },
+      });
+    }
+  }
+  return actions;
+});
+
+connection.onDocumentLinks((params) => {
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined || !analysis.uri.startsWith("file:")) return [];
+  const positions = new PositionMap(analysis.text);
+  const links = [];
+  const imports = /^\s*import\s+(?:contract\s+)?"([^"\r\n]+)"/gmu;
+  for (const match of analysis.text.matchAll(imports)) {
+    const requested = match[1];
+    const full = match[0];
+    const matchOffset = match.index;
+    if (requested === undefined || matchOffset === undefined || requested.startsWith("abla/")) {
+      continue;
+    }
+    const relative = full.indexOf(requested);
+    const start = matchOffset + relative;
+    const sourcePath = fileURLToPath(analysis.uri);
+    const targetPath = path.resolve(path.dirname(sourcePath), requested);
+    links.push({
+      range: positions.range({ start, end: start + requested.length }),
+      target: pathToFileURL(targetPath).href,
+      tooltip: `Open ${requested}`,
+    });
+  }
+  return links;
 });
 
 connection.languages.callHierarchy.onPrepare((params) => {

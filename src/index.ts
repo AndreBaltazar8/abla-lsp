@@ -140,7 +140,7 @@ export class WorkspaceIndex {
         (symbol) =>
           symbol.id !== resolved.symbol.id &&
           symbol.name === request.newName &&
-          symbol.topLevel === resolved.symbol.topLevel,
+          this.#sameNamespace(symbol, resolved.symbol),
       )
     ) {
       return { ok: false, reason: `renaming would collide with '${request.newName}'` };
@@ -162,11 +162,52 @@ export class WorkspaceIndex {
     if (requests.length === 0) {
       return { ok: false, reason: "bulk rename requires at least one symbol" };
     }
-    const combined = new Map<string, TextEdit[]>();
+    const planned = new Map<string, { readonly resolved: ResolvedSymbol; readonly newName: string }>();
     for (const request of requests) {
-      const result = this.rename(request);
-      if (!result.ok) return result;
-      for (const [uri, edits] of Object.entries(result.edit.changes ?? {})) {
+      if (!validIdentifier.test(request.newName)) {
+        return { ok: false, reason: "the new name is not a valid Abla identifier" };
+      }
+      const resolved = this.prepareRename(request.uri, request.position);
+      if (resolved === undefined) {
+        return { ok: false, reason: "one bulk rename target is ambiguous or incompletely analyzed" };
+      }
+      const previous = planned.get(resolved.symbol.id);
+      if (previous !== undefined && previous.newName !== request.newName) {
+        return { ok: false, reason: "one symbol has conflicting bulk rename targets" };
+      }
+      planned.set(resolved.symbol.id, { resolved, newName: request.newName });
+    }
+
+    const finalNames = this.symbols().map((symbol) => ({
+      symbol,
+      name: planned.get(symbol.id)?.newName ?? symbol.name,
+    }));
+    for (let left = 0; left < finalNames.length; left += 1) {
+      const first = finalNames[left];
+      if (first === undefined) continue;
+      for (let right = left + 1; right < finalNames.length; right += 1) {
+        const second = finalNames[right];
+        if (
+          second !== undefined &&
+          first.name === second.name &&
+          this.#sameNamespace(first.symbol, second.symbol) &&
+          (planned.has(first.symbol.id) || planned.has(second.symbol.id))
+        ) {
+          return { ok: false, reason: `bulk rename would collide with '${first.name}'` };
+        }
+      }
+    }
+
+    const combined = new Map<string, TextEdit[]>();
+    for (const { resolved, newName } of planned.values()) {
+      for (const [uri, occurrences] of this.references(resolved)) {
+        const analysis = this.#documents.get(uri);
+        if (analysis === undefined) continue;
+        const positions = new PositionMap(analysis.text);
+        const edits = occurrences.map((occurrence) => ({
+          range: positions.range(occurrence.range),
+          newText: newName,
+        }));
         const existing = combined.get(uri) ?? [];
         for (const edit of edits) {
           const duplicate = existing.find(
@@ -239,5 +280,10 @@ export class WorkspaceIndex {
     return this.symbols().filter(
       (candidate) => candidate.topLevel && candidate.name === symbol.name,
     ).length === 1;
+  }
+
+  #sameNamespace(left: AblaSymbol, right: AblaSymbol): boolean {
+    if (left.topLevel || right.topLevel) return left.topLevel && right.topLevel;
+    return left.containerId !== undefined && left.containerId === right.containerId;
   }
 }
