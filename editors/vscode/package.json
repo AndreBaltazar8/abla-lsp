@@ -1,0 +1,89 @@
+{
+  "name": "abla-language-server",
+  "displayName": "Abla Language Server",
+  "description": "Compiler-backed navigation, diagnostics, semantic editing, and refactoring for Abla",
+  "version": "0.1.0",
+  "publisher": "andrebaltazar8",
+  "license": "MIT",
+  "homepage": "https://abla.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AndreBaltazar8/abla-lsp.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:abla"
+  ],
+    "main": "./dist/extension.cjs",
+  "extensionDependencies": [
+    "andrebaltazar8.abla-tmlanguage"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.cjs && esbuild ../../src/main.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run check && npm run build",
+    "package": "npm test && vsce package --no-dependencies"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "abla.moveDeclarations",
+        "title": "Abla: Move Selected Declarations to File"
+      },
+      {
+        "command": "abla.bulkRename",
+        "title": "Abla: Rename Symbols at All Cursors"
+      }
+    ],
+    "configuration": {
+      "title": "Abla Language Server",
+      "properties": {
+        "abla.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to an external abla-lsp executable. Leave empty to use the language server bundled with this extension."
+        },
+        "abla.compiler.path": {
+          "type": "string",
+          "default": "ablac",
+          "description": "Path to the ablac executable used for semantic analysis."
+        },
+        "abla.compiler.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use compiler-backed semantic analysis and validated refactoring."
+        },
+        "abla.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace language-server protocol traffic."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "10.1.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}
