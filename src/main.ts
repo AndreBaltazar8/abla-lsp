@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   createConnection,
+  CompletionItemKind,
   DiagnosticSeverity,
   DocumentSymbol,
   ErrorCodes,
@@ -13,12 +14,17 @@ import {
   ProposedFeatures,
   Range,
   ResponseError,
+  SemanticTokensBuilder,
   SymbolInformation,
   SymbolKind,
   TextDocumentSyncKind,
   TextDocuments,
   WorkspaceSymbolParams,
   type DocumentSymbolParams,
+  type CallHierarchyIncomingCall,
+  type CallHierarchyItem,
+  type CallHierarchyOutgoingCall,
+  type CompletionItem,
   type Hover,
   type ReferenceParams,
   type RenameParams,
@@ -28,6 +34,13 @@ import {
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { CompilerClient } from "./compiler-client.js";
 import type { CompilerWorkspaceSnapshot } from "./compiler-protocol.js";
+import {
+  ablaKeywords,
+  callContext,
+  foldingRanges,
+  formatDocument,
+  symbolSignature,
+} from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
 import { WorkspaceIndex, type RenameRequest } from "./index.js";
 import { PositionMap } from "./positions.js";
@@ -70,6 +83,35 @@ function symbolKind(symbol: AblaSymbol): SymbolKind {
   }
 }
 
+function completionKind(symbol: AblaSymbol): CompletionItemKind {
+  switch (symbol.kind) {
+    case "function":
+      return CompletionItemKind.Function;
+    case "class":
+      return CompletionItemKind.Class;
+    case "enum":
+      return CompletionItemKind.Enum;
+    case "value":
+      return CompletionItemKind.Constant;
+    case "variable":
+      return CompletionItemKind.Variable;
+  }
+}
+
+function semanticTokenType(symbol: AblaSymbol): number {
+  switch (symbol.kind) {
+    case "function":
+      return 0;
+    case "class":
+      return 1;
+    case "enum":
+      return 2;
+    case "value":
+    case "variable":
+      return 3;
+  }
+}
+
 function location(symbol: AblaSymbol): Location | undefined {
   const analysis = index.document(symbol.uri);
   if (analysis === undefined) return undefined;
@@ -77,6 +119,21 @@ function location(symbol: AblaSymbol): Location | undefined {
     symbol.uri,
     new PositionMap(analysis.text).range(symbol.selectionRange),
   );
+}
+
+function callHierarchyItem(symbol: AblaSymbol): CallHierarchyItem | undefined {
+  const analysis = index.document(symbol.uri);
+  if (analysis === undefined) return undefined;
+  const positions = new PositionMap(analysis.text);
+  return {
+    name: symbol.name,
+    kind: symbolKind(symbol),
+    detail: symbol.detail,
+    uri: symbol.uri,
+    range: positions.range(symbol.range),
+    selectionRange: positions.range(symbol.selectionRange),
+    data: { id: symbol.id },
+  };
 }
 
 function publishDiagnostics(analysis: DocumentAnalysis): void {
@@ -119,6 +176,19 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       definitionProvider: true,
       referencesProvider: true,
       hoverProvider: true,
+      completionProvider: { triggerCharacters: ["."] },
+      signatureHelpProvider: { triggerCharacters: ["(", ","] },
+      semanticTokensProvider: {
+        legend: {
+          tokenTypes: ["function", "class", "enum", "variable", "property"],
+          tokenModifiers: ["declaration", "readonly"],
+        },
+        full: true,
+      },
+      foldingRangeProvider: true,
+      selectionRangeProvider: true,
+      documentFormattingProvider: true,
+      callHierarchyProvider: true,
       renameProvider: { prepareProvider: true },
       executeCommandProvider: {
         commands: ["abla.renameSymbols"],
@@ -335,6 +405,193 @@ connection.onHover((params: TextDocumentPositionParams): Hover | null => {
     },
     range: positions.range(resolved.symbol.selectionRange),
   };
+});
+
+connection.onCompletion((params): CompletionItem[] => {
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined) return [];
+  const offset = new PositionMap(analysis.text).offset(params.position);
+  let begin = offset;
+  while (begin > 0 && /[A-Za-z0-9_]/.test(analysis.text[begin - 1] ?? "")) begin -= 1;
+  const prefix = analysis.text.slice(begin, offset).toLocaleLowerCase();
+  const items = new Map<string, CompletionItem>();
+  for (const symbol of index.symbols()) {
+    if (prefix !== "" && !symbol.name.toLocaleLowerCase().startsWith(prefix)) continue;
+    const resolved = index.symbolById(symbol.id);
+    items.set(symbol.name, {
+      label: symbol.name,
+      kind: completionKind(symbol),
+      detail: resolved === undefined ? symbol.detail : symbolSignature(resolved.analysis, symbol),
+      sortText: `0-${symbol.name}`,
+    });
+  }
+  for (const keyword of ablaKeywords) {
+    if (prefix !== "" && !keyword.startsWith(prefix)) continue;
+    if (!items.has(keyword)) {
+      items.set(keyword, {
+        label: keyword,
+        kind: CompletionItemKind.Keyword,
+        sortText: `1-${keyword}`,
+      });
+    }
+  }
+  return [...items.values()].slice(0, 250);
+});
+
+connection.onSignatureHelp((params) => {
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined) return null;
+  const offset = new PositionMap(analysis.text).offset(params.position);
+  const context = callContext(analysis.text, offset);
+  if (context === undefined) return null;
+  const candidates = index.symbols().filter(
+    (symbol) => symbol.kind === "function" && symbol.name === context.name,
+  );
+  if (candidates.length === 0) return null;
+  return {
+    activeSignature: 0,
+    activeParameter: context.activeParameter,
+    signatures: candidates.map((symbol) => {
+      const resolved = index.symbolById(symbol.id);
+      return {
+        label: resolved === undefined
+          ? `${symbol.detail} ${symbol.name}`
+          : symbolSignature(resolved.analysis, symbol),
+      };
+    }),
+  };
+});
+
+connection.languages.semanticTokens.on((params) => {
+  const analysis = index.document(params.textDocument.uri);
+  const builder = new SemanticTokensBuilder();
+  if (analysis === undefined) return builder.build();
+  const positions = new PositionMap(analysis.text);
+  const sorted = [...analysis.occurrences].sort(
+    (left, right) => left.range.start - right.range.start,
+  );
+  for (const occurrence of sorted) {
+    const start = positions.position(occurrence.range.start);
+    const declared = occurrence.declarationId === undefined
+      ? analysis.authority === "syntax"
+        ? index.resolve(analysis.uri, start)
+        : undefined
+      : index.symbolById(occurrence.declarationId);
+    if (declared === undefined) continue;
+    const end = positions.position(occurrence.range.end);
+    if (start.line !== end.line || end.character <= start.character) continue;
+    const declaration = declared.symbol.selectionRange.start === occurrence.range.start &&
+      declared.symbol.uri === analysis.uri;
+    const readonly = declared.symbol.kind === "value";
+    builder.push(
+      start.line,
+      start.character,
+      end.character - start.character,
+      semanticTokenType(declared.symbol),
+      (declaration ? 1 : 0) | (readonly ? 2 : 0),
+    );
+  }
+  return builder.build();
+});
+
+connection.onFoldingRanges((params) => {
+  const analysis = index.document(params.textDocument.uri);
+  return analysis === undefined ? [] : foldingRanges(analysis.text);
+});
+
+connection.onSelectionRanges((params) => {
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined) return [];
+  const positions = new PositionMap(analysis.text);
+  return params.positions.map((position) => {
+    const offset = positions.offset(position);
+    const occurrence = analysis.occurrences.find(
+      (candidate) => candidate.range.start <= offset && offset < candidate.range.end,
+    );
+    const selected = occurrence === undefined
+      ? undefined
+      : index.containingSymbol(analysis.uri, occurrence.range);
+    const documentRange = positions.range({ start: 0, end: analysis.text.length });
+    if (occurrence === undefined) return { range: documentRange };
+    const occurrenceRange = positions.range(occurrence.range);
+    if (selected === undefined) {
+      return { range: occurrenceRange, parent: { range: documentRange } };
+    }
+    return {
+      range: occurrenceRange,
+      parent: {
+        range: positions.range(selected.symbol.range),
+        parent: { range: documentRange },
+      },
+    };
+  });
+});
+
+connection.onDocumentFormatting((params) => {
+  const analysis = index.document(params.textDocument.uri);
+  return analysis === undefined ? [] : formatDocument(analysis.text);
+});
+
+connection.languages.callHierarchy.onPrepare((params) => {
+  const resolved = index.resolve(params.textDocument.uri, params.position);
+  if (resolved === undefined || resolved.symbol.kind !== "function") return null;
+  const item = callHierarchyItem(resolved.symbol);
+  return item === undefined ? null : [item];
+});
+
+connection.languages.callHierarchy.onIncomingCalls((params) => {
+  const id = (params.item.data as { readonly id?: string } | undefined)?.id;
+  if (id === undefined) return [];
+  const groups = new Map<string, CallHierarchyIncomingCall>();
+  for (const analysis of index.documents()) {
+    const positions = new PositionMap(analysis.text);
+    for (const occurrence of analysis.occurrences) {
+      if (occurrence.declarationId !== id) continue;
+      const owner = index.containingSymbol(analysis.uri, occurrence.range);
+      if (owner === undefined || owner.symbol.id === id || owner.symbol.kind !== "function") {
+        continue;
+      }
+      const item = callHierarchyItem(owner.symbol);
+      if (item === undefined) continue;
+      const existing = groups.get(owner.symbol.id);
+      if (existing === undefined) {
+        groups.set(owner.symbol.id, {
+          from: item,
+          fromRanges: [positions.range(occurrence.range)],
+        });
+      } else existing.fromRanges.push(positions.range(occurrence.range));
+    }
+  }
+  return [...groups.values()];
+});
+
+connection.languages.callHierarchy.onOutgoingCalls((params) => {
+  const id = (params.item.data as { readonly id?: string } | undefined)?.id;
+  if (id === undefined) return [];
+  const source = index.symbolById(id);
+  if (source === undefined) return [];
+  const positions = new PositionMap(source.analysis.text);
+  const groups = new Map<string, CallHierarchyOutgoingCall>();
+  for (const occurrence of source.analysis.occurrences) {
+    if (
+      occurrence.declarationId === undefined ||
+      occurrence.declarationId === id ||
+      occurrence.range.start < source.symbol.range.start ||
+      occurrence.range.end > source.symbol.range.end
+    ) continue;
+    const target = index.symbolById(occurrence.declarationId);
+    if (target === undefined || target.symbol.kind !== "function") continue;
+    const item = callHierarchyItem(target.symbol);
+    if (item === undefined) continue;
+    const existing = groups.get(target.symbol.id);
+    if (existing === undefined) {
+      groups.set(target.symbol.id, {
+        to: item,
+        fromRanges: [positions.range(occurrence.range)],
+      });
+    } else existing.fromRanges.push(positions.range(occurrence.range));
+  }
+  return [...groups.values()];
 });
 
 connection.onPrepareRename((params: TextDocumentPositionParams): Range | null => {

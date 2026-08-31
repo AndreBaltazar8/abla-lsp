@@ -59,6 +59,26 @@ export class WorkspaceIndex {
       .filter((symbol) => symbol.name.toLocaleLowerCase().includes(normalized));
   }
 
+  symbolById(id: string): ResolvedSymbol | undefined {
+    for (const analysis of this.#documents.values()) {
+      const symbol = analysis.symbols.find((candidate) => candidate.id === id);
+      if (symbol !== undefined) return { symbol, analysis };
+    }
+    return undefined;
+  }
+
+  containingSymbol(uri: string, range: { readonly start: number; readonly end: number }): ResolvedSymbol | undefined {
+    const analysis = this.#documents.get(uri);
+    if (analysis === undefined) return undefined;
+    let found: AblaSymbol | undefined;
+    for (const symbol of analysis.symbols) {
+      if (symbol.range.start <= range.start && range.end <= symbol.range.end) {
+        if (found === undefined || symbol.range.start >= found.range.start) found = symbol;
+      }
+    }
+    return found === undefined ? undefined : { symbol: found, analysis };
+  }
+
   resolve(uri: string, position: Position): ResolvedSymbol | undefined {
     const analysis = this.#documents.get(uri);
     if (analysis === undefined) return undefined;

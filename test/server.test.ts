@@ -85,12 +85,21 @@ test("stdio server initializes and serves symbols and rename", async () => {
     initializationOptions: { compiler: { enabled: false } },
   });
   const initialization = initialize.result as {
-    capabilities: { renameProvider: unknown; documentSymbolProvider: unknown };
+    capabilities: {
+      renameProvider: unknown;
+      documentSymbolProvider: unknown;
+      completionProvider: unknown;
+      semanticTokensProvider: unknown;
+      callHierarchyProvider: unknown;
+    };
     serverInfo: { name: string };
   };
   assert.equal(initialization.serverInfo.name, "abla-lsp");
   assert.equal(initialization.capabilities.documentSymbolProvider, true);
   assert.deepEqual(initialization.capabilities.renameProvider, { prepareProvider: true });
+  assert.notEqual(initialization.capabilities.completionProvider, undefined);
+  assert.notEqual(initialization.capabilities.semanticTokensProvider, undefined);
+  assert.equal(initialization.capabilities.callHierarchyProvider, true);
   client.notify("initialized", {});
 
   const uri = "file:///workspace/main.ab";
@@ -109,6 +118,34 @@ test("stdio server initializes and serves symbols and rename", async () => {
     (symbols.result as Array<{ name: string }>).map((symbol) => symbol.name),
     ["answer", "main"],
   );
+
+  const completion = await client.request("textDocument/completion", {
+    textDocument: { uri },
+    position: { line: 1, character: 4 },
+  });
+  assert.ok(
+    (completion.result as Array<{ label: string }>).some((item) => item.label === "answer"),
+  );
+
+  const signature = await client.request("textDocument/signatureHelp", {
+    textDocument: { uri },
+    position: { line: 1, character: 23 },
+  });
+  assert.match(
+    (signature.result as { signatures: Array<{ label: string }> }).signatures[0]?.label ?? "",
+    /answer/,
+  );
+
+  const semanticTokens = await client.request("textDocument/semanticTokens/full", {
+    textDocument: { uri },
+  });
+  assert.ok((semanticTokens.result as { data: number[] }).data.length >= 10);
+
+  const formatted = await client.request("textDocument/formatting", {
+    textDocument: { uri },
+    options: { tabSize: 4, insertSpaces: true },
+  });
+  assert.deepEqual(formatted.result, []);
 
   const rename = await client.request("textDocument/rename", {
     textDocument: { uri },
