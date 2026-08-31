@@ -8,6 +8,7 @@ import {
   createConnection,
   CompletionItemKind,
   DiagnosticSeverity,
+  DocumentHighlightKind,
   DocumentSymbol,
   ErrorCodes,
   InitializeParams,
@@ -205,7 +206,10 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       documentSymbolProvider: true,
       workspaceSymbolProvider: true,
       definitionProvider: true,
+      declarationProvider: true,
+      typeDefinitionProvider: true,
       referencesProvider: true,
+      documentHighlightProvider: true,
       hoverProvider: true,
       completionProvider: { triggerCharacters: ["."] },
       signatureHelpProvider: { triggerCharacters: ["(", ","] },
@@ -231,7 +235,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
           analysisAuthority: "syntax",
           compilerAnalysisProtocol: 1,
           semanticState: compilerConfiguration.enabled ? "starting" : "disabled",
-          transactionalRefactors: ["renameSymbols"],
+          transactionalRefactors: ["renameSymbols", "moveDeclarations"],
         },
       },
     },
@@ -481,6 +485,34 @@ connection.onDefinition((params: TextDocumentPositionParams): Location[] => {
   return resolvedLocation === undefined ? [] : [resolvedLocation];
 });
 
+connection.onDeclaration((params: TextDocumentPositionParams): Location[] => {
+  const resolved = index.resolve(params.textDocument.uri, params.position);
+  if (resolved === undefined) return [];
+  const resolvedLocation = location(resolved.symbol);
+  return resolvedLocation === undefined ? [] : [resolvedLocation];
+});
+
+connection.onTypeDefinition((params: TextDocumentPositionParams): Location[] => {
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined) return [];
+  const offset = new PositionMap(analysis.text).offset(params.position);
+  const occurrence = analysis.occurrences.find(
+    (candidate) => candidate.range.start <= offset && offset < candidate.range.end,
+  );
+  if (occurrence?.type === undefined) return [];
+  const typeNames: readonly string[] =
+    occurrence.type.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+  const candidates = index.symbols().filter(
+    (symbol) =>
+      (symbol.kind === "class" || symbol.kind === "interface" ||
+        symbol.kind === "enum" || symbol.kind === "type") &&
+      typeNames.includes(symbol.name),
+  );
+  if (candidates.length !== 1 || candidates[0] === undefined) return [];
+  const target = location(candidates[0]);
+  return target === undefined ? [] : [target];
+});
+
 connection.onReferences((params: ReferenceParams): Location[] => {
   const resolved = index.resolve(params.textDocument.uri, params.position);
   if (resolved === undefined) return [];
@@ -490,13 +522,31 @@ connection.onReferences((params: ReferenceParams): Location[] => {
     if (analysis === undefined) continue;
     const positions = new PositionMap(analysis.text);
     for (const occurrence of occurrences) {
-      if (!params.context.includeDeclaration && occurrence.declarationId !== undefined) {
+      if (
+        !params.context.includeDeclaration &&
+        uri === resolved.symbol.uri &&
+        occurrence.range.start === resolved.symbol.selectionRange.start &&
+        occurrence.range.end === resolved.symbol.selectionRange.end
+      ) {
         continue;
       }
       result.push(Location.create(uri, positions.range(occurrence.range)));
     }
   }
   return result;
+});
+
+connection.onDocumentHighlight((params: TextDocumentPositionParams) => {
+  const resolved = index.resolve(params.textDocument.uri, params.position);
+  if (resolved === undefined) return [];
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined) return [];
+  const occurrences = index.references(resolved).get(analysis.uri) ?? [];
+  const positions = new PositionMap(analysis.text);
+  return occurrences.map((occurrence) => ({
+    range: positions.range(occurrence.range),
+    kind: DocumentHighlightKind.Text,
+  }));
 });
 
 connection.onHover((params: TextDocumentPositionParams): Hover | null => {

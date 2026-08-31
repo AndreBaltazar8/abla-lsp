@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 
 const cancelled = new Set();
+const documents = new Map();
 const input = createInterface({ input: process.stdin });
 
 function respond(id, result) {
@@ -24,11 +25,67 @@ input.on("line", (line) => {
   if (message.method === "analyze") {
     const finish = () => {
       if (!cancelled.has(message.id)) {
-        respond(message.id, { revision: "test-1", documents: [] });
+        respond(message.id, {
+          revision: "test-1",
+          documents: [...documents.values()].map((document) => {
+            const widget = document.text.indexOf("Widget");
+            const make = document.text.indexOf("make");
+            const widgetCall = document.text.lastIndexOf("Widget");
+            const symbols = [];
+            const occurrences = [];
+            if (widget >= 0) {
+              symbols.push({
+                id: `${document.uri}#Widget`, name: "Widget", kind: "class",
+                uri: document.uri, range: { start: 0, end: 15 },
+                selectionRange: { start: widget, end: widget + 6 },
+                detail: "class Widget", topLevel: true,
+              });
+              occurrences.push({
+                name: "Widget", range: { start: widget, end: widget + 6 },
+                declarationId: `${document.uri}#Widget`, type: "Widget",
+              });
+              if (widgetCall > widget) occurrences.push({
+                name: "Widget", range: { start: widgetCall, end: widgetCall + 6 },
+                declarationId: `${document.uri}#Widget`, type: "Widget",
+              });
+            }
+            if (make >= 0) {
+              symbols.push({
+                id: `${document.uri}#make`, name: "make", kind: "function",
+                uri: document.uri, range: { start: 16, end: document.text.length },
+                selectionRange: { start: make, end: make + 4 },
+                detail: "fun Widget", topLevel: true,
+              });
+              occurrences.push({
+                name: "make", range: { start: make, end: make + 4 },
+                declarationId: `${document.uri}#make`, type: "Widget",
+              });
+            }
+            return {
+              ...document,
+              symbols,
+              occurrences,
+              diagnostics: [{
+                code: "I_TEST", message: "semantic snapshot",
+                range: { start: 0, end: 0 },
+              }],
+            };
+          }),
+        });
       }
     };
     if (message.params?.wait === true) setTimeout(finish, 250);
     else finish();
+    return;
+  }
+  if (message.method === "document/open" || message.method === "document/change") {
+    documents.set(message.params.uri, message.params);
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "document/close") {
+    documents.delete(message.params.uri);
+    respond(message.id, null);
     return;
   }
   if (message.method === "refactor/validate") {
