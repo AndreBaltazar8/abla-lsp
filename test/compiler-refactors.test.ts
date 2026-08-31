@@ -7,6 +7,7 @@ import type { CompilerTextEdit } from "../src/compiler-protocol.js";
 import { WorkspaceIndex } from "../src/index.js";
 import { PositionMap } from "../src/positions.js";
 import { AdvancedRefactors } from "../src/refactors.js";
+import { applyStagedRecipe } from "../src/staged-refactors.js";
 import { SyntaxAnalyzer } from "../src/source.js";
 
 const compiler = process.env.ABLA_COMPILER;
@@ -54,4 +55,36 @@ test("advanced refactors pass the real compiler prospective validator", {
     invariants: ["no-new-errors", "preserve-unedited-symbols"],
   });
   assert.deepEqual(validated.valid, true, validated.reason ?? "compiler rejected the refactor");
+
+  const targetUri = pathToFileURL(path.join(root, "staged-target.ab")).href;
+  const staged = await applyStagedRecipe(snapshot, [
+    {
+      kind: "move",
+      request: {
+        symbols: [
+          { uri, name: "Point" },
+          { uri, name: "length" },
+        ],
+        targetUri,
+        createTarget: true,
+      },
+    },
+    {
+      kind: "rename",
+      request: {
+        symbol: { uri: targetUri, name: "length" },
+        newName: "distance",
+      },
+    },
+  ], client);
+  assert.equal(staged.ok, true, staged.ok ? "staged refactor passed" : staged.reason);
+  if (staged.ok) {
+    const textChanges = staged.edit.documentChanges?.filter(
+      (change) => "textDocument" in change,
+    ) ?? [];
+    const source = textChanges.find((change) => change.textDocument.uri === uri)?.edits[0];
+    const target = textChanges.find((change) => change.textDocument.uri === targetUri)?.edits[0];
+    assert.match(source !== undefined && "newText" in source ? source.newText : "", /distance\(Point\(2\), 3\)/u);
+    assert.match(target !== undefined && "newText" in target ? target.newText : "", /fun distance/u);
+  }
 });

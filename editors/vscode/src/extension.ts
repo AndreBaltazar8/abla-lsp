@@ -262,7 +262,7 @@ async function removeDeadCode(): Promise<void> {
   if (accepted !== undefined) await executeRefactor("abla.removeDeadCode", {});
 }
 
-async function applyRecipe(): Promise<void> {
+async function applyRecipe(command = "abla.applyRefactorRecipe"): Promise<void> {
   const selected = await vscode.window.showOpenDialog({
     canSelectMany: false,
     filters: { "Abla refactor recipe": ["json"] },
@@ -273,7 +273,7 @@ async function applyRecipe(): Promise<void> {
   const parsed = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))) as {
     readonly operations?: readonly unknown[];
   };
-  await executeRefactor("abla.applyRefactorRecipe", { operations: parsed.operations ?? [] });
+  await executeRefactor(command, { operations: parsed.operations ?? [] });
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -314,6 +314,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("abla.makeRuntime", () => toggleCompileTime(false)),
     vscode.commands.registerCommand("abla.removeDeadCode", removeDeadCode),
     vscode.commands.registerCommand("abla.applyRefactorRecipe", applyRecipe),
+    vscode.commands.registerCommand(
+      "abla.applyStagedRefactorRecipe",
+      () => applyRecipe("abla.applyStagedRefactorRecipe"),
+    ),
   );
   await client.start();
 }

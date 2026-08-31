@@ -67,6 +67,10 @@ import {
   type ToggleCompileTimeRequest,
 } from "./refactors.js";
 import { SyntaxAnalyzer } from "./source.js";
+import {
+  applyStagedRecipe,
+  type StagedRefactorOperation,
+} from "./staged-refactors.js";
 import { indexWorkspace } from "./workspace.js";
 
 const connection = createConnection(ProposedFeatures.all);
@@ -81,6 +85,7 @@ let compilerConfiguration: {
 } = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac" };
 let compiler: CompilerClient | undefined;
 let compilerRevision: string | undefined;
+let compilerSnapshot: CompilerWorkspaceSnapshot | undefined;
 let compilerAnalysis: AbortController | undefined;
 let compilerAnalysisTimer: ReturnType<typeof setTimeout> | undefined;
 let compilerRestartTimer: ReturnType<typeof setTimeout> | undefined;
@@ -337,6 +342,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
           "abla.toggleCompileTime",
           "abla.removeDeadCode",
           "abla.applyRefactorRecipe",
+          "abla.applyStagedRefactorRecipe",
         ],
       },
       experimental: {
@@ -350,6 +356,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
             "inlineSymbol", "promoteLocal", "extractInterface",
             "generateDeclaration", "repairOwnership", "toggleCompileTime",
             "removeDeadCode", "applyRefactorRecipe",
+            "applyStagedRefactorRecipe",
           ],
         },
       },
@@ -374,7 +381,11 @@ async function startCompiler(): Promise<void> {
       : { arguments: compilerConfiguration.arguments }),
     log: (message) => connection.console.info(`ablac analyze: ${message}`),
     onExit: (error) => {
-      if (compiler === candidate) compiler = undefined;
+      if (compiler === candidate) {
+        compiler = undefined;
+        compilerRevision = undefined;
+        compilerSnapshot = undefined;
+      }
       void indexWorkspace(connection, index, workspaceRoots);
       for (const document of documents.all()) {
         publishDiagnostics(index.upsert(
@@ -435,6 +446,7 @@ function scheduleCompilerRestart(error: Error): void {
 
 function acceptCompilerSnapshot(snapshot: CompilerWorkspaceSnapshot): void {
   compilerRevision = snapshot.revision;
+  compilerSnapshot = snapshot;
   for (const document of snapshot.documents) {
     const analysis: DocumentAnalysis = {
       authority: "compiler",
@@ -1254,6 +1266,20 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
       | undefined;
     apply = argument?.apply === true;
     result = advancedRefactors.recipe(argument?.operations ?? []);
+  } else if (params.command === "abla.applyStagedRefactorRecipe") {
+    const argument = params.arguments?.[0] as
+      | { readonly operations?: readonly StagedRefactorOperation[]; readonly apply?: boolean }
+      | undefined;
+    apply = argument?.apply === true;
+    if (compiler === undefined || compilerSnapshot === undefined) {
+      result = { ok: false, reason: "staged recipes require an active compiler snapshot" };
+    } else {
+      result = await applyStagedRecipe(
+        compilerSnapshot,
+        argument?.operations ?? [],
+        compiler,
+      );
+    }
   } else return null;
   if (!result.ok) throw new ResponseError(ErrorCodes.InvalidRequest, result.reason);
   await validateCompilerEdit(result.edit);
@@ -1277,6 +1303,7 @@ connection.onShutdown(async () => {
   await compiler?.stop();
   compiler = undefined;
   compilerRevision = undefined;
+  compilerSnapshot = undefined;
 });
 
 documents.listen(connection);

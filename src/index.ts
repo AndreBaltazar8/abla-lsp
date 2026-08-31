@@ -301,6 +301,17 @@ export class WorkspaceIndex {
     const snippets: string[] = [];
     const changes: Record<string, TextEdit[]> = {};
     const movedIds = new Set(selected.map((resolved) => resolved.symbol.id));
+    let addedNested = true;
+    while (addedNested) {
+      addedNested = false;
+      for (const symbol of this.symbols()) {
+        if (symbol.containerId !== undefined && movedIds.has(symbol.containerId) &&
+          !movedIds.has(symbol.id)) {
+          movedIds.add(symbol.id);
+          addedNested = true;
+        }
+      }
+    }
     const movedRanges = new Map<string, Array<{ start: number; end: number }>>();
     for (const resolved of selected) {
       const attachedStart = this.#attachedCommentStart(

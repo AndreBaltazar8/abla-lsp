@@ -108,6 +108,10 @@
       {
         "command": "abla.applyRefactorRecipe",
         "title": "Abla: Apply Refactor Recipe"
+      },
+      {
+        "command": "abla.applyStagedRefactorRecipe",
+        "title": "Abla: Apply Staged Refactor Recipe"
       }
     ],
     "configuration": {

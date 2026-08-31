@@ -325,6 +325,41 @@ test("declaration move does not overwrite an existing target", () => {
   assert.deepEqual(result, { ok: false, reason: "the requested target file already exists" });
 });
 
+test("moving a type carries its nested semantic identities", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const sourceUri = "file:///workspace/source.ab";
+  const targetUri = "file:///workspace/types.ab";
+  const text = [
+    "class Point(val x: int)",
+    "fun length(point: Point): int = point.x",
+    "fun main: int = length(Point(2))",
+    "",
+  ].join("\n");
+  const syntax = new SyntaxAnalyzer().analyze(sourceUri, 1, text);
+  const point = syntax.symbols.find((symbol) => symbol.name === "Point");
+  const length = syntax.symbols.find((symbol) => symbol.name === "length");
+  const property = syntax.symbols.find((symbol) => symbol.name === "x");
+  index.upsertAnalysis({
+    ...syntax,
+    authority: "compiler",
+    occurrences: syntax.occurrences.map((occurrence) => {
+      const declaration = occurrence.name === "Point" ? point
+        : occurrence.name === "length" ? length
+        : occurrence.name === "x" ? property
+        : undefined;
+      return declaration === undefined
+        ? occurrence
+        : { ...occurrence, declarationId: declaration.id };
+    }),
+  });
+  const result = index.moveDeclarations({
+    symbolIds: [point?.id ?? "", length?.id ?? ""],
+    targetUri,
+    createTarget: true,
+  });
+  assert.equal(result.ok, true, result.ok ? "move passed" : result.reason);
+});
+
 test("declaration move rejects a newly introduced import cycle", () => {
   const index = new WorkspaceIndex(new SyntaxAnalyzer());
   const sourceUri = "file:///workspace/source.ab";

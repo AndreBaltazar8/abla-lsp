@@ -782,27 +782,30 @@ export class AdvancedRefactors {
     return editResult(edits, this.#index.documents());
   }
 
+  operation(operation: RefactorOperation): EditResult {
+    switch (operation.kind) {
+      case "rename": return this.#index.rename(operation.request);
+      case "bulkRename": return this.#index.bulkRename(operation.requests);
+      case "move": return this.#index.moveDeclarations(operation.request);
+      case "changeSignature": return this.changeSignature(operation.request);
+      case "extractFunction": return this.extractFunction(operation.request);
+      case "functionToMethod": return this.functionToMethod(operation.request);
+      case "methodToFunction": return this.methodToFunction(operation.request);
+      case "inline": return this.inlineSymbol(operation.request);
+      case "promoteLocal": return this.promoteLocal(operation.request);
+      case "extractInterface": return this.extractInterface(operation.request);
+      case "generateDeclaration": return this.generateDeclaration(operation.request);
+      case "repairOwnership": return this.repairOwnership(operation.request);
+      case "toggleCompileTime": return this.toggleCompileTime(operation.request);
+      case "removeDeadCode": return this.removeDeadCode(operation.request);
+    }
+  }
+
   recipe(operations: readonly RefactorOperation[]): EditResult {
     if (operations.length === 0) return failure("a refactor recipe requires at least one operation");
     const edits: OffsetEdit[] = [];
     for (const operation of operations) {
-      let result: EditResult;
-      switch (operation.kind) {
-        case "rename": result = this.#index.rename(operation.request); break;
-        case "bulkRename": result = this.#index.bulkRename(operation.requests); break;
-        case "move": result = this.#index.moveDeclarations(operation.request); break;
-        case "changeSignature": result = this.changeSignature(operation.request); break;
-        case "extractFunction": result = this.extractFunction(operation.request); break;
-        case "functionToMethod": result = this.functionToMethod(operation.request); break;
-        case "methodToFunction": result = this.methodToFunction(operation.request); break;
-        case "inline": result = this.inlineSymbol(operation.request); break;
-        case "promoteLocal": result = this.promoteLocal(operation.request); break;
-        case "extractInterface": result = this.extractInterface(operation.request); break;
-        case "generateDeclaration": result = this.generateDeclaration(operation.request); break;
-        case "repairOwnership": result = this.repairOwnership(operation.request); break;
-        case "toggleCompileTime": result = this.toggleCompileTime(operation.request); break;
-        case "removeDeadCode": result = this.removeDeadCode(operation.request); break;
-      }
+      const result = this.operation(operation);
       if (!result.ok) return result;
       const converted = workspaceEdits(result.edit, this.#index.documents());
       if (converted === undefined) return failure("a recipe operation targets an unavailable document");
