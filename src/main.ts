@@ -28,6 +28,7 @@ import {
   type CallHierarchyIncomingCall,
   type CallHierarchyItem,
   type CallHierarchyOutgoingCall,
+  type CodeAction,
   type CompletionItem,
   type Hover,
   type InlayHint,
@@ -299,7 +300,9 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       selectionRangeProvider: true,
       inlayHintProvider: true,
       documentFormattingProvider: true,
-      codeActionProvider: { codeActionKinds: [CodeActionKind.SourceOrganizeImports] },
+      codeActionProvider: {
+        codeActionKinds: [CodeActionKind.QuickFix, CodeActionKind.SourceOrganizeImports],
+      },
       documentLinkProvider: { resolveProvider: false },
       callHierarchyProvider: true,
       renameProvider: { prepareProvider: true },
@@ -828,10 +831,72 @@ connection.onDocumentFormatting((params) => {
   return analysis === undefined ? [] : formatDocument(analysis.text);
 });
 
-connection.onCodeAction((params) => {
+function editDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        (current[rightIndex - 1] ?? 0) + 1,
+        (previous[rightIndex] ?? 0) + 1,
+        (previous[rightIndex - 1] ?? 0) +
+          (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    for (let index = 0; index < current.length; index += 1) {
+      previous[index] = current[index] ?? 0;
+    }
+  }
+  return previous[right.length] ?? Math.max(left.length, right.length);
+}
+
+connection.onCodeAction(async (params) => {
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return [];
-  const actions = [];
+  const actions: CodeAction[] = [];
+  if (
+    analysis.authority === "compiler" &&
+    (params.context.only === undefined ||
+      params.context.only.some((kind) => CodeActionKind.QuickFix.startsWith(kind)))
+  ) {
+    const positions = new PositionMap(analysis.text);
+    for (const diagnostic of params.context.diagnostics) {
+      if (diagnostic.source !== "ablac" || diagnostic.code !== "E_SEMANTIC") continue;
+      const start = positions.offset(diagnostic.range.start);
+      const end = positions.offset(diagnostic.range.end);
+      const misspelled = analysis.text.slice(start, end);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(misspelled)) continue;
+      const ranked = completionSymbols(analysis, start, start)
+        .filter((symbol) => symbol.name !== misspelled)
+        .map((symbol) => ({ symbol, distance: editDistance(misspelled, symbol.name) }))
+        .sort((left, right) =>
+          left.distance === right.distance
+            ? left.symbol.name.localeCompare(right.symbol.name)
+            : left.distance - right.distance,
+        );
+      const best = ranked[0];
+      const next = ranked[1];
+      const limit = Math.max(2, Math.min(3, Math.floor(misspelled.length / 3)));
+      if (best === undefined || best.distance > limit || best.distance === next?.distance) continue;
+      const edit: WorkspaceEdit = {
+        changes: {
+          [analysis.uri]: [{ range: diagnostic.range, newText: best.symbol.name }],
+        },
+      };
+      try {
+        await validateCompilerEdit(edit);
+        actions.push({
+          title: `Change '${misspelled}' to '${best.symbol.name}'`,
+          kind: CodeActionKind.QuickFix,
+          diagnostics: [diagnostic],
+          isPreferred: true,
+          edit,
+        });
+      } catch {
+        // A spelling suggestion is shown only after compiler validation.
+      }
+    }
+  }
   if (
     params.context.only === undefined ||
     params.context.only.some((kind) => CodeActionKind.SourceOrganizeImports.startsWith(kind))

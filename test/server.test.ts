@@ -253,11 +253,20 @@ test("compiler snapshots drive type definitions", async (context) => {
         "fun build(name: string, count: int): int = count",
         'fun main: int = build("x", 2)',
         "fun show(widget: Widget): int = widget.",
+        'fun typo: int = buidl("x", 2)',
         "",
       ].join("\n"),
     },
   });
-  await compilerDiagnostics;
+  const published = await compilerDiagnostics as {
+    diagnostics: Array<{
+      range: { start: { line: number; character: number }; end: { line: number; character: number } };
+      code: string;
+      message: string;
+      source: string;
+      severity: number;
+    }>;
+  };
   const typeDefinition = await client.request("textDocument/typeDefinition", {
     textDocument: { uri },
     position: { line: 1, character: 5 },
@@ -287,4 +296,14 @@ test("compiler snapshots drive type definitions", async (context) => {
     (memberCompletion.result as Array<{ label: string }>).map((item) => item.label),
     ["render"],
   );
+
+  const quickFixes = await client.request("textDocument/codeAction", {
+    textDocument: { uri },
+    range: published.diagnostics[0]?.range,
+    context: { diagnostics: published.diagnostics, only: ["quickfix"] },
+  });
+  const fixes = quickFixes.result as Array<{
+    edit: { changes: Record<string, Array<{ newText: string }>> };
+  }>;
+  assert.equal(fixes[0]?.edit.changes[uri]?.[0]?.newText, "build");
 });

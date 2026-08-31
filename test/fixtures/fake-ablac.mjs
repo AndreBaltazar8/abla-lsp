@@ -101,11 +101,15 @@ input.on("line", (line) => {
                 declarationId: buildId, type: "int",
               });
             }
+            const misspelled = document.text.indexOf("buidl");
             return {
               ...document,
               symbols,
               occurrences,
-              diagnostics: [{
+              diagnostics: [misspelled >= 0 ? {
+                code: "E_SEMANTIC", message: "unknown name buidl",
+                range: { start: misspelled, end: misspelled + 5 },
+              } : {
                 code: "I_TEST", message: "semantic snapshot",
                 range: { start: 0, end: 0 },
               }],
