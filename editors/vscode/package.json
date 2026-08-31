@@ -2,7 +2,7 @@
   "name": "abla-language-server",
   "displayName": "Abla Language Server",
   "description": "Compiler-backed navigation, diagnostics, semantic editing, and refactoring for Abla",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "andrebaltazar8",
   "license": "MIT",
   "homepage": "https://abla.dev",

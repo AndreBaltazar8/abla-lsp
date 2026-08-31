@@ -354,7 +354,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         },
       },
     },
-    serverInfo: { name: "abla-lsp", version: "0.1.1" },
+    serverInfo: { name: "abla-lsp", version: "0.2.0" },
   };
 });
 
@@ -390,7 +390,7 @@ async function startCompiler(): Promise<void> {
     const initialized = await candidate.start({
       workspaceRoots,
       clientName: "abla-lsp",
-      clientVersion: "0.1.1",
+      clientVersion: "0.2.0",
     });
     if (initialized.protocolVersion !== 1) {
       throw new Error(
