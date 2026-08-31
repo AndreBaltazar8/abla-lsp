@@ -116,9 +116,11 @@ export class WorkspaceIndex {
     if (resolved === undefined || !this.#uniquelyResolvable(resolved.symbol)) {
       return undefined;
     }
+    const semanticComponent = this.#componentUris(resolved.symbol.uri);
     if (
       resolved.analysis.authority === "compiler" &&
       this.documents().some((analysis) =>
+        semanticComponent.has(analysis.uri) &&
         analysis.occurrences.some(
           (occurrence) =>
             occurrence.name === resolved.symbol.name &&
@@ -422,8 +424,50 @@ export class WorkspaceIndex {
   }
 
   #sameNamespace(left: AblaSymbol, right: AblaSymbol): boolean {
-    if (left.topLevel || right.topLevel) return left.topLevel && right.topLevel;
+    if (left.topLevel || right.topLevel) {
+      if (!left.topLevel || !right.topLevel) return false;
+      const leftAnalysis = this.#documents.get(left.uri);
+      const rightAnalysis = this.#documents.get(right.uri);
+      if (leftAnalysis?.authority === "compiler" &&
+        rightAnalysis?.authority === "compiler") {
+        return this.#componentUris(left.uri).has(right.uri);
+      }
+      return true;
+    }
     return left.containerId !== undefined && left.containerId === right.containerId;
+  }
+
+  #componentUris(startUri: string): ReadonlySet<string> {
+    const graph = new Map<string, Set<string>>();
+    for (const analysis of this.#documents.values()) graph.set(analysis.uri, new Set());
+    for (const analysis of this.#documents.values()) {
+      if (!analysis.uri.startsWith("file:")) continue;
+      const imports = /^\s*import\s+(?:contract\s+)?"([^"\r\n]+)"/gmu;
+      for (const match of analysis.text.matchAll(imports)) {
+        const requested = match[1];
+        if (requested === undefined || requested.startsWith("abla/")) continue;
+        try {
+          const importer = fileURLToPath(analysis.uri);
+          const importedUri = pathToFileURL(
+            path.resolve(path.dirname(importer), requested),
+          ).href;
+          if (!graph.has(importedUri)) continue;
+          graph.get(analysis.uri)?.add(importedUri);
+          graph.get(importedUri)?.add(analysis.uri);
+        } catch {
+          // Non-file documents form their own analysis component.
+        }
+      }
+    }
+    const visited = new Set<string>();
+    const pending = [startUri];
+    while (pending.length > 0) {
+      const uri = pending.pop();
+      if (uri === undefined || visited.has(uri)) continue;
+      visited.add(uri);
+      for (const linked of graph.get(uri) ?? []) pending.push(linked);
+    }
+    return visited;
   }
 
   #attachedCommentStart(text: string, declarationStart: number): number {

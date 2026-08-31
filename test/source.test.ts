@@ -176,6 +176,48 @@ test("compiler rename refuses incomplete reference coverage", () => {
   assert.equal(result.ok, false);
 });
 
+test("unrelated unresolved names do not block a canonical rename", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const declarationUri = "file:///workspace/project/one.ab";
+  index.upsertAnalysis({
+    authority: "compiler",
+    uri: declarationUri,
+    version: 1,
+    text: "fun run: int = 1\n",
+    symbols: [{
+      id: "abla:project:run",
+      name: "run",
+      kind: "function",
+      uri: declarationUri,
+      range: { start: 0, end: 16 },
+      selectionRange: { start: 4, end: 7 },
+      detail: "fun int",
+      topLevel: true,
+    }],
+    occurrences: [{
+      name: "run",
+      range: { start: 4, end: 7 },
+      declarationId: "abla:project:run",
+    }],
+    diagnostics: [],
+  });
+  index.upsertAnalysis({
+    authority: "compiler",
+    uri: "file:///workspace/unrelated/example.ab",
+    version: 1,
+    text: "val callback = run\n",
+    symbols: [],
+    occurrences: [{ name: "run", range: { start: 15, end: 18 } }],
+    diagnostics: [],
+  });
+  const result = index.rename({
+    uri: declarationUri,
+    position: { line: 0, character: 5 },
+    newName: "execute",
+  });
+  assert.equal(result.ok, true);
+});
+
 test("bulk rename supports atomic symbol swaps", () => {
   const index = new WorkspaceIndex(new SyntaxAnalyzer());
   const text = "fun alpha: int = beta()\nfun beta: int = 1\n";
