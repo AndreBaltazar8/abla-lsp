@@ -51,12 +51,28 @@ import {
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
 import { WorkspaceIndex, type EditResult, type RenameRequest } from "./index.js";
 import { PositionMap } from "./positions.js";
+import {
+  AdvancedRefactors,
+  type ChangeSignatureRequest,
+  type ConvertFunctionToMethodRequest,
+  type ConvertMethodToFunctionRequest,
+  type ExtractFunctionRequest,
+  type ExtractInterfaceRequest,
+  type GenerateDeclarationRequest,
+  type InlineSymbolRequest,
+  type OwnershipRepairRequest,
+  type PromoteLocalRequest,
+  type RefactorOperation,
+  type RemoveDeadCodeRequest,
+  type ToggleCompileTimeRequest,
+} from "./refactors.js";
 import { SyntaxAnalyzer } from "./source.js";
 import { indexWorkspace } from "./workspace.js";
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 const index = new WorkspaceIndex(new SyntaxAnalyzer());
+const advancedRefactors = new AdvancedRefactors(index);
 let workspaceRoots: string[] = [];
 let compilerConfiguration: {
   readonly enabled: boolean;
@@ -303,14 +319,38 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       callHierarchyProvider: true,
       renameProvider: { prepareProvider: true },
       executeCommandProvider: {
-        commands: ["abla.renameSymbols", "abla.moveDeclarations"],
+        commands: [
+          "abla.renameSymbols",
+          "abla.moveDeclarations",
+          "abla.moveTypes",
+          "abla.splitDeclarations",
+          "abla.mergeDeclarations",
+          "abla.changeSignature",
+          "abla.extractFunction",
+          "abla.functionToMethod",
+          "abla.methodToFunction",
+          "abla.inlineSymbol",
+          "abla.promoteLocal",
+          "abla.extractInterface",
+          "abla.generateDeclaration",
+          "abla.repairOwnership",
+          "abla.toggleCompileTime",
+          "abla.removeDeadCode",
+          "abla.applyRefactorRecipe",
+        ],
       },
       experimental: {
         abla: {
           analysisAuthority: "syntax",
           compilerAnalysisProtocol: 1,
           semanticState: compilerConfiguration.enabled ? "starting" : "disabled",
-          transactionalRefactors: ["renameSymbols", "moveDeclarations"],
+          transactionalRefactors: [
+            "renameSymbols", "moveDeclarations", "changeSignature",
+            "extractFunction", "functionToMethod", "methodToFunction",
+            "inlineSymbol", "promoteLocal", "extractInterface",
+            "generateDeclaration", "repairOwnership", "toggleCompileTime",
+            "removeDeadCode", "applyRefactorRecipe",
+          ],
         },
       },
     },
@@ -1012,6 +1052,20 @@ connection.onRenameRequest(async (params: RenameParams): Promise<WorkspaceEdit> 
   return result.edit;
 });
 
+interface CommandSelection {
+  readonly uri: string;
+  readonly position: { readonly line: number; readonly character: number };
+}
+
+function commandSymbolId(
+  symbolId: string | undefined,
+  selection: CommandSelection | undefined,
+): string {
+  if (symbolId !== undefined) return symbolId;
+  if (selection === undefined) return "";
+  return index.resolve(selection.uri, selection.position)?.symbol.id ?? "";
+}
+
 connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
   let apply = false;
   let result: EditResult;
@@ -1021,7 +1075,12 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
       | undefined;
     apply = argument?.apply === true;
     result = index.bulkRename(argument?.renames ?? []);
-  } else if (params.command === "abla.moveDeclarations") {
+  } else if ([
+    "abla.moveDeclarations",
+    "abla.moveTypes",
+    "abla.splitDeclarations",
+    "abla.mergeDeclarations",
+  ].includes(params.command)) {
     const argument = params.arguments?.[0] as
       | {
           readonly symbolIds?: readonly string[];
@@ -1042,6 +1101,134 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
       symbolIds: [...(argument?.symbolIds ?? []), ...selectedIds],
       targetUri: argument?.targetUri ?? "",
     });
+  } else if (params.command === "abla.changeSignature") {
+    const argument = params.arguments?.[0] as
+      | (Omit<ChangeSignatureRequest, "symbolId"> & {
+          readonly symbolId?: string;
+          readonly selection?: CommandSelection;
+          readonly apply?: boolean;
+        })
+      | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.changeSignature({
+      symbolId: commandSymbolId(argument?.symbolId, argument?.selection),
+      parameters: argument?.parameters ?? [],
+      ...(argument?.returnType === undefined ? {} : { returnType: argument.returnType }),
+    });
+  } else if (params.command === "abla.extractFunction") {
+    const argument = params.arguments?.[0] as (ExtractFunctionRequest & { readonly apply?: boolean }) | undefined;
+    apply = argument?.apply === true;
+    result = argument === undefined
+      ? { ok: false, reason: "extract function requires a request" }
+      : advancedRefactors.extractFunction(argument);
+  } else if (params.command === "abla.functionToMethod") {
+    const argument = params.arguments?.[0] as
+      | (Omit<ConvertFunctionToMethodRequest, "symbolId"> & {
+          readonly symbolId?: string;
+          readonly selection?: CommandSelection;
+          readonly apply?: boolean;
+        })
+      | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.functionToMethod({
+      symbolId: commandSymbolId(argument?.symbolId, argument?.selection),
+      receiver: argument?.receiver ?? 0,
+    });
+  } else if (params.command === "abla.methodToFunction") {
+    const argument = params.arguments?.[0] as
+      | (Omit<ConvertMethodToFunctionRequest, "symbolId"> & {
+          readonly symbolId?: string;
+          readonly selection?: CommandSelection;
+          readonly apply?: boolean;
+        })
+      | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.methodToFunction({
+      symbolId: commandSymbolId(argument?.symbolId, argument?.selection),
+      ...(argument?.receiverName === undefined ? {} : { receiverName: argument.receiverName }),
+    });
+  } else if (params.command === "abla.inlineSymbol") {
+    const argument = params.arguments?.[0] as
+      | (Omit<InlineSymbolRequest, "symbolId"> & {
+          readonly symbolId?: string;
+          readonly selection?: CommandSelection;
+          readonly apply?: boolean;
+        })
+      | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.inlineSymbol({
+      symbolId: commandSymbolId(argument?.symbolId, argument?.selection),
+      ...(argument?.removeDeclaration === undefined ? {} : { removeDeclaration: argument.removeDeclaration }),
+    });
+  } else if (params.command === "abla.promoteLocal") {
+    const argument = params.arguments?.[0] as
+      | (Omit<PromoteLocalRequest, "symbolId"> & {
+          readonly symbolId?: string;
+          readonly selection?: CommandSelection;
+          readonly apply?: boolean;
+        })
+      | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.promoteLocal({
+      symbolId: commandSymbolId(argument?.symbolId, argument?.selection),
+      destination: argument?.destination ?? "parameter",
+    });
+  } else if (params.command === "abla.extractInterface") {
+    const argument = params.arguments?.[0] as
+      | (Partial<ExtractInterfaceRequest> & {
+          readonly selections?: readonly CommandSelection[];
+          readonly apply?: boolean;
+        })
+      | undefined;
+    apply = argument?.apply === true;
+    const selected = (argument?.selections ?? []).flatMap((selection) => {
+      const resolved = index.resolve(selection.uri, selection.position);
+      return resolved === undefined ? [] : [resolved.symbol];
+    });
+    const selectedMethods = selected.filter((symbol) => symbol.kind === "function");
+    const inferredClass = selectedMethods[0]?.containerId ??
+      selected.find((symbol) => symbol.kind === "class")?.id;
+    result = advancedRefactors.extractInterface({
+      classSymbolId: argument?.classSymbolId ?? inferredClass ?? "",
+      methodSymbolIds: argument?.methodSymbolIds ?? selectedMethods.map((symbol) => symbol.id),
+      name: argument?.name ?? "",
+      ...(argument?.targetUri === undefined ? {} : { targetUri: argument.targetUri }),
+    });
+  } else if (params.command === "abla.generateDeclaration") {
+    const argument = params.arguments?.[0] as (GenerateDeclarationRequest & { readonly apply?: boolean }) | undefined;
+    apply = argument?.apply === true;
+    result = argument === undefined
+      ? { ok: false, reason: "generate declaration requires a request" }
+      : advancedRefactors.generateDeclaration(argument);
+  } else if (params.command === "abla.repairOwnership") {
+    const argument = params.arguments?.[0] as (OwnershipRepairRequest & { readonly apply?: boolean }) | undefined;
+    apply = argument?.apply === true;
+    result = argument === undefined
+      ? { ok: false, reason: "ownership repair requires a request" }
+      : advancedRefactors.repairOwnership(argument);
+  } else if (params.command === "abla.toggleCompileTime") {
+    const argument = params.arguments?.[0] as
+      | (Omit<ToggleCompileTimeRequest, "symbolId"> & {
+          readonly symbolId?: string;
+          readonly selection?: CommandSelection;
+          readonly apply?: boolean;
+        })
+      | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.toggleCompileTime({
+      symbolId: commandSymbolId(argument?.symbolId, argument?.selection),
+      compileTime: argument?.compileTime ?? true,
+    });
+  } else if (params.command === "abla.removeDeadCode") {
+    const argument = params.arguments?.[0] as (RemoveDeadCodeRequest & { readonly apply?: boolean }) | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.removeDeadCode(argument ?? {});
+  } else if (params.command === "abla.applyRefactorRecipe") {
+    const argument = params.arguments?.[0] as
+      | { readonly operations?: readonly RefactorOperation[]; readonly apply?: boolean }
+      | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.recipe(argument?.operations ?? []);
   } else return null;
   if (!result.ok) throw new ResponseError(ErrorCodes.InvalidRequest, result.reason);
   await validateCompilerEdit(result.edit);
