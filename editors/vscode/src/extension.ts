@@ -186,6 +186,44 @@ async function inlineSymbol(): Promise<void> {
   if (selection !== undefined) await executeRefactor("abla.inlineSymbol", { selection });
 }
 
+async function introduceBinding(destination: "local" | "topLevel"): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (editor === undefined || editor.document.languageId !== "abla" || editor.selection.isEmpty) return;
+  const name = await vscode.window.showInputBox({
+    title: destination === "local" ? "Introduce Local Binding" : "Introduce Top-Level Constant",
+    prompt: "Name for the selected expression",
+    validateInput: (value) => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value)
+      ? undefined
+      : "Enter a valid Abla identifier",
+  });
+  if (name === undefined) return;
+  const bindingKind = destination === "local"
+    ? await vscode.window.showQuickPick(["val", "var"] as const, {
+        placeHolder: "Binding kind",
+      })
+    : "val";
+  if (bindingKind === undefined) return;
+  await executeRefactor("abla.introduceBinding", {
+    uri: editor.document.uri.toString(),
+    range: {
+      start: { line: editor.selection.start.line, character: editor.selection.start.character },
+      end: { line: editor.selection.end.line, character: editor.selection.end.character },
+    },
+    name,
+    destination,
+    mutable: bindingKind === "var",
+  });
+}
+
+async function changeBindingKind(): Promise<void> {
+  const selection = activeSelection();
+  if (selection === undefined) return;
+  const kind = await vscode.window.showQuickPick(["val", "var", "own"] as const, {
+    placeHolder: "Convert binding to…",
+  });
+  if (kind !== undefined) await executeRefactor("abla.changeBindingKind", { selection, kind });
+}
+
 async function promoteLocal(): Promise<void> {
   const selection = activeSelection();
   if (selection === undefined) return;
@@ -306,6 +344,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("abla.functionToMethod", functionToMethod),
     vscode.commands.registerCommand("abla.methodToFunction", methodToFunction),
     vscode.commands.registerCommand("abla.inlineSymbol", inlineSymbol),
+    vscode.commands.registerCommand("abla.introduceLocal", () => introduceBinding("local")),
+    vscode.commands.registerCommand("abla.introduceConstant", () => introduceBinding("topLevel")),
+    vscode.commands.registerCommand("abla.changeBindingKind", changeBindingKind),
     vscode.commands.registerCommand("abla.promoteLocal", promoteLocal),
     vscode.commands.registerCommand("abla.extractInterface", extractInterface),
     vscode.commands.registerCommand("abla.generateDeclaration", generateDeclaration),

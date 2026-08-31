@@ -53,6 +53,7 @@ import { WorkspaceIndex, type EditResult, type RenameRequest } from "./index.js"
 import { PositionMap } from "./positions.js";
 import {
   AdvancedRefactors,
+  type ChangeBindingKindRequest,
   type ChangeSignatureRequest,
   type ConvertFunctionToMethodRequest,
   type ConvertMethodToFunctionRequest,
@@ -60,6 +61,7 @@ import {
   type ExtractInterfaceRequest,
   type GenerateDeclarationRequest,
   type InlineSymbolRequest,
+  type IntroduceBindingRequest,
   type OwnershipRepairRequest,
   type PromoteLocalRequest,
   type RefactorOperation,
@@ -335,6 +337,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
           "abla.functionToMethod",
           "abla.methodToFunction",
           "abla.inlineSymbol",
+          "abla.introduceBinding",
+          "abla.changeBindingKind",
           "abla.promoteLocal",
           "abla.extractInterface",
           "abla.generateDeclaration",
@@ -353,7 +357,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
           transactionalRefactors: [
             "renameSymbols", "moveDeclarations", "changeSignature",
             "extractFunction", "functionToMethod", "methodToFunction",
-            "inlineSymbol", "promoteLocal", "extractInterface",
+            "inlineSymbol", "introduceBinding", "changeBindingKind",
+            "promoteLocal", "extractInterface",
             "generateDeclaration", "repairOwnership", "toggleCompileTime",
             "removeDeadCode", "applyRefactorRecipe",
             "applyStagedRefactorRecipe",
@@ -1196,6 +1201,27 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
     result = advancedRefactors.inlineSymbol({
       symbolId: commandSymbolId(argument?.symbolId, argument?.selection),
       ...(argument?.removeDeclaration === undefined ? {} : { removeDeclaration: argument.removeDeclaration }),
+    });
+  } else if (params.command === "abla.introduceBinding") {
+    const argument = params.arguments?.[0] as
+      | (IntroduceBindingRequest & { readonly apply?: boolean })
+      | undefined;
+    apply = argument?.apply === true;
+    result = argument === undefined
+      ? { ok: false, reason: "introduce binding requires a request" }
+      : advancedRefactors.introduceBinding(argument);
+  } else if (params.command === "abla.changeBindingKind") {
+    const argument = params.arguments?.[0] as
+      | (Omit<ChangeBindingKindRequest, "symbolId"> & {
+          readonly symbolId?: string;
+          readonly selection?: CommandSelection;
+          readonly apply?: boolean;
+        })
+      | undefined;
+    apply = argument?.apply === true;
+    result = advancedRefactors.changeBindingKind({
+      symbolId: commandSymbolId(argument?.symbolId, argument?.selection),
+      kind: argument?.kind ?? "val",
     });
   } else if (params.command === "abla.promoteLocal") {
     const argument = params.arguments?.[0] as

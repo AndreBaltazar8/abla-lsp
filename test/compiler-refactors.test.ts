@@ -9,8 +9,28 @@ import { PositionMap } from "../src/positions.js";
 import { AdvancedRefactors } from "../src/refactors.js";
 import { applyStagedRecipe } from "../src/staged-refactors.js";
 import { SyntaxAnalyzer } from "../src/source.js";
+import type { WorkspaceEdit } from "vscode-languageserver/node";
 
 const compiler = process.env.ABLA_COMPILER;
+
+function compilerEdits(index: WorkspaceIndex, edit: WorkspaceEdit): CompilerTextEdit[] {
+  return Object.entries(edit.changes ?? {}).flatMap(([editUri, values]) => {
+    const analysis = index.document(editUri);
+    assert.notEqual(analysis, undefined);
+    const positions = new PositionMap(analysis?.text ?? "");
+    return values.flatMap((edit) => {
+      if (!("newText" in edit)) return [];
+      const start = positions.offset(edit.range.start);
+      const end = positions.offset(edit.range.end);
+      return [{
+        uri: editUri,
+        start: Buffer.byteLength((analysis?.text ?? "").slice(0, start), "utf8"),
+        end: Buffer.byteLength((analysis?.text ?? "").slice(0, end), "utf8"),
+        newText: edit.newText,
+      }];
+    });
+  });
+}
 
 test("advanced refactors pass the real compiler prospective validator", {
   skip: compiler === undefined ? "set ABLA_COMPILER to run the compiler integration gate" : false,
@@ -83,6 +103,41 @@ test("advanced refactors pass the real compiler prospective validator", {
   });
   assert.equal(inlineValidated.valid, true, inlineValidated.reason ?? "compiler rejected block inline");
 
+  const analysis = index.document(uri);
+  assert.notEqual(analysis, undefined);
+  const pointStart = analysis?.text.lastIndexOf("Point(2)") ?? -1;
+  const introducedLocal = new AdvancedRefactors(index).introduceBinding({
+    uri,
+    range: new PositionMap(analysis?.text ?? "").range({
+      start: pointStart,
+      end: pointStart + "Point(2)".length,
+    }),
+    name: "point",
+    destination: "local",
+  });
+  assert.equal(introducedLocal.ok, true);
+  if (!introducedLocal.ok) return;
+  const localValidated = await client.validate({
+    baseRevision: snapshot.revision,
+    edits: compilerEdits(index, introducedLocal.edit),
+    invariants: ["no-new-errors", "preserve-unedited-symbols"],
+  });
+  assert.equal(localValidated.valid, true, localValidated.reason ?? "compiler rejected introduce local");
+
+  const defaultScale = index.symbols().find((symbol) => symbol.name === "defaultScale");
+  const changedBinding = new AdvancedRefactors(index).changeBindingKind({
+    symbolId: defaultScale?.id ?? "",
+    kind: "var",
+  });
+  assert.equal(changedBinding.ok, true);
+  if (!changedBinding.ok) return;
+  const bindingValidated = await client.validate({
+    baseRevision: snapshot.revision,
+    edits: compilerEdits(index, changedBinding.edit),
+    invariants: ["no-new-errors", "preserve-unedited-symbols"],
+  });
+  assert.equal(bindingValidated.valid, true, bindingValidated.reason ?? "compiler rejected binding conversion");
+
   const targetUri = pathToFileURL(path.join(root, "staged-target.ab")).href;
   const staged = await applyStagedRecipe(snapshot, [
     {
@@ -111,7 +166,7 @@ test("advanced refactors pass the real compiler prospective validator", {
     ) ?? [];
     const source = textChanges.find((change) => change.textDocument.uri === uri)?.edits[0];
     const target = textChanges.find((change) => change.textDocument.uri === targetUri)?.edits[0];
-    assert.match(source !== undefined && "newText" in source ? source.newText : "", /distance\(Point\(2\), 3\)/u);
+    assert.match(source !== undefined && "newText" in source ? source.newText : "", /distance\(Point\(2\), defaultScale\)/u);
     assert.match(target !== undefined && "newText" in target ? target.newText : "", /fun distance/u);
   }
 });

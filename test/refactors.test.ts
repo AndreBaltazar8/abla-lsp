@@ -179,6 +179,58 @@ test("inline preserves a multi-statement block at standalone calls", () => {
   assert.match(output, /fun main\(\): void \{\n    \{\n        val copy = \(42\)\n        print\(copy\)\n    \}\n\}/u);
 });
 
+test("introduce local evaluates the selected expression once at its statement", () => {
+  const uri = "file:///workspace/main.ab";
+  const text = "fun main(): int {\n    val result = 20 + 22\n    result\n}\n";
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  compilerDocument(index, uri, text);
+  const start = text.indexOf("20 + 22");
+  const result = new AdvancedRefactors(index).introduceBinding({
+    uri,
+    range: new PositionMap(text).range({ start, end: start + "20 + 22".length }),
+    name: "answer",
+    destination: "local",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const output = apply(text, uri, result.edit);
+  assert.match(output, /    val answer = 20 \+ 22\n    val result = answer/u);
+});
+
+test("introduce constant lifts an uncaptured expression to top level", () => {
+  const uri = "file:///workspace/main.ab";
+  const text = "fun main: int = 20 + 22\n";
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  compilerDocument(index, uri, text);
+  const start = text.indexOf("20 + 22");
+  const result = new AdvancedRefactors(index).introduceBinding({
+    uri,
+    range: new PositionMap(text).range({ start, end: start + "20 + 22".length }),
+    name: "answer",
+    destination: "topLevel",
+    type: "int",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const output = apply(text, uri, result.edit);
+  assert.match(output, /fun main: int = answer/u);
+  assert.match(output, /val answer: int = 20 \+ 22/u);
+});
+
+test("change binding kind converts a compiler-resolved declaration keyword", () => {
+  const uri = "file:///workspace/main.ab";
+  const text = "val answer: int = 42\nfun main: int = answer\n";
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  compilerDocument(index, uri, text);
+  const answer = index.symbols().find((symbol) => symbol.name === "answer");
+  const result = new AdvancedRefactors(index).changeBindingKind({
+    symbolId: answer?.id ?? "",
+    kind: "var",
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.match(apply(text, uri, result.edit), /^var answer/u);
+});
+
 test("extract interface copies selected method signatures", () => {
   const uri = "file:///workspace/main.ab";
   const text = "class Greeter(val prefix: string) {\n    fun greet(name: string): string = prefix\n    fun count(): int = 1\n}\n";

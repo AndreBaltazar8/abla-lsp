@@ -78,6 +78,18 @@
         "title": "Abla: Inline Symbol"
       },
       {
+        "command": "abla.introduceLocal",
+        "title": "Abla: Introduce Local from Selection"
+      },
+      {
+        "command": "abla.introduceConstant",
+        "title": "Abla: Introduce Top-Level Constant from Selection"
+      },
+      {
+        "command": "abla.changeBindingKind",
+        "title": "Abla: Change Binding Kind"
+      },
+      {
         "command": "abla.promoteLocal",
         "title": "Abla: Promote Local"
       },

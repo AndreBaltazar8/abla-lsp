@@ -64,6 +64,20 @@ export interface InlineSymbolRequest {
   readonly removeDeclaration?: boolean;
 }
 
+export interface IntroduceBindingRequest {
+  readonly uri: string;
+  readonly range: Range;
+  readonly name: string;
+  readonly destination: "local" | "topLevel";
+  readonly mutable?: boolean;
+  readonly type?: string;
+}
+
+export interface ChangeBindingKindRequest {
+  readonly symbolId: string;
+  readonly kind: "val" | "var" | "own";
+}
+
 export interface PromoteLocalRequest {
   readonly symbolId: string;
   readonly destination: "parameter" | "topLevel";
@@ -109,6 +123,8 @@ export type RefactorOperation =
   | { readonly kind: "functionToMethod"; readonly request: ConvertFunctionToMethodRequest }
   | { readonly kind: "methodToFunction"; readonly request: ConvertMethodToFunctionRequest }
   | { readonly kind: "inline"; readonly request: InlineSymbolRequest }
+  | { readonly kind: "introduceBinding"; readonly request: IntroduceBindingRequest }
+  | { readonly kind: "changeBindingKind"; readonly request: ChangeBindingKindRequest }
   | { readonly kind: "promoteLocal"; readonly request: PromoteLocalRequest }
   | { readonly kind: "extractInterface"; readonly request: ExtractInterfaceRequest }
   | { readonly kind: "generateDeclaration"; readonly request: GenerateDeclarationRequest }
@@ -695,6 +711,96 @@ export class AdvancedRefactors {
     return editResult(edits, this.#index.documents());
   }
 
+  introduceBinding(request: IntroduceBindingRequest): EditResult {
+    if (!identifier.test(request.name)) return failure("the introduced binding name is invalid");
+    if (request.type?.includes("\n") === true || request.type?.includes("\r") === true) {
+      return failure("the introduced binding type must fit on one line");
+    }
+    const analysis = this.#index.document(request.uri);
+    if (analysis === undefined || analysis.authority !== "compiler") {
+      return failure("introduce binding requires a compiler-resolved document");
+    }
+    const positions = new PositionMap(analysis.text);
+    const range = {
+      start: positions.offset(request.range.start),
+      end: positions.offset(request.range.end),
+    };
+    if (range.start >= range.end) return failure("select an expression to introduce");
+    const expression = analysis.text.slice(range.start, range.end).trim();
+    if (expression === "" || /[\r\n]/u.test(expression)) {
+      return failure("introduce binding currently requires a single-line expression");
+    }
+    const keyword = request.mutable === true ? "var" : "val";
+    const type = request.type?.trim();
+    const declaration = `${keyword} ${request.name}${type === undefined || type === "" ? "" : `: ${type}`} = ${expression}`;
+    if (request.destination === "topLevel") {
+      if (this.#index.symbols().some((symbol) => symbol.topLevel && symbol.name === request.name)) {
+        return failure(`a top-level symbol named '${request.name}' already exists`);
+      }
+      for (const occurrence of analysis.occurrences) {
+        if (occurrence.range.start < range.start || occurrence.range.end > range.end) continue;
+        const dependency = occurrence.declarationId === undefined
+          ? undefined
+          : this.#index.symbolById(occurrence.declarationId)?.symbol;
+        if (dependency !== undefined && !dependency.topLevel) {
+          return failure("a top-level binding cannot capture a local, parameter, or member");
+        }
+      }
+      const prefix = analysis.text.endsWith("\n") ? "\n" : "\n\n";
+      return editResult([
+        { uri: analysis.uri, range, newText: request.name },
+        {
+          uri: analysis.uri,
+          range: { start: analysis.text.length, end: analysis.text.length },
+          newText: `${prefix}${declaration}\n`,
+        },
+      ], this.#index.documents());
+    }
+
+    let owner = this.#index.containingSymbol(analysis.uri, range);
+    while (owner !== undefined && owner.symbol.kind !== "function") {
+      owner = owner.symbol.containerId === undefined
+        ? undefined
+        : this.#index.symbolById(owner.symbol.containerId);
+    }
+    const parsedOwner = owner === undefined ? undefined : this.#function(owner.symbol.id);
+    if (parsedOwner?.bodyRange === undefined || parsedOwner.body?.trimStart().startsWith("{") !== true ||
+      range.start < parsedOwner.bodyRange.start || range.end > parsedOwner.bodyRange.end) {
+      return failure("a local binding can only be introduced inside a block-bodied function");
+    }
+    if (this.#index.symbols().some((symbol) =>
+      symbol.containerId === owner?.symbol.id && symbol.name === request.name)) {
+      return failure(`a local named '${request.name}' already exists in this function`);
+    }
+    const lineStart = analysis.text.lastIndexOf("\n", Math.max(0, range.start - 1)) + 1;
+    const indentation = /^\s*/u.exec(analysis.text.slice(lineStart, range.start))?.[0] ?? "";
+    return editResult([
+      { uri: analysis.uri, range: { start: lineStart, end: lineStart }, newText: `${indentation}${declaration}\n` },
+      { uri: analysis.uri, range, newText: request.name },
+    ], this.#index.documents());
+  }
+
+  changeBindingKind(request: ChangeBindingKindRequest): EditResult {
+    const resolved = this.#index.symbolById(request.symbolId);
+    if (resolved === undefined || !["value", "variable", "property"].includes(resolved.symbol.kind)) {
+      return failure("change binding kind requires a resolved binding or property");
+    }
+    const prefix = resolved.analysis.text.slice(
+      resolved.symbol.range.start,
+      resolved.symbol.selectionRange.start,
+    );
+    const matches = [...prefix.matchAll(/\b(?:val|var|own)\b/gu)];
+    const keyword = matches.at(-1);
+    if (keyword?.index === undefined) return failure("the binding has no mutable or ownership keyword");
+    if (keyword[0] === request.kind) return { ok: true, edit: { changes: {} } };
+    const start = resolved.symbol.range.start + keyword.index;
+    return editResult([{
+      uri: resolved.analysis.uri,
+      range: { start, end: start + keyword[0].length },
+      newText: request.kind,
+    }], this.#index.documents());
+  }
+
   promoteLocal(request: PromoteLocalRequest): EditResult {
     const resolved = this.#index.symbolById(request.symbolId);
     if (resolved === undefined || resolved.symbol.topLevel || !["value", "variable"].includes(resolved.symbol.kind)) {
@@ -841,6 +947,8 @@ export class AdvancedRefactors {
       case "functionToMethod": return this.functionToMethod(operation.request);
       case "methodToFunction": return this.methodToFunction(operation.request);
       case "inline": return this.inlineSymbol(operation.request);
+      case "introduceBinding": return this.introduceBinding(operation.request);
+      case "changeBindingKind": return this.changeBindingKind(operation.request);
       case "promoteLocal": return this.promoteLocal(operation.request);
       case "extractInterface": return this.extractInterface(operation.request);
       case "generateDeclaration": return this.generateDeclaration(operation.request);

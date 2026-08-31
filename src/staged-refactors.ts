@@ -14,6 +14,7 @@ import type { AblaSymbol } from "./model.js";
 import { PositionMap } from "./positions.js";
 import {
   AdvancedRefactors,
+  type ChangeBindingKindRequest,
   type ChangeSignatureRequest,
   type ConvertFunctionToMethodRequest,
   type ConvertMethodToFunctionRequest,
@@ -180,6 +181,11 @@ function normalizeOperation(
       if (id === undefined) return { ok: false, reason: "staged inline requires one uniquely resolved symbol" };
       return { ok: true, operation: { kind: "inline", request: { ...request, symbolId: id } as unknown as InlineSymbolRequest } };
     }
+    case "changeBindingKind": {
+      const id = resolved();
+      if (id === undefined) return { ok: false, reason: "staged binding conversion requires one uniquely resolved binding" };
+      return { ok: true, operation: { kind: "changeBindingKind", request: { ...request, symbolId: id } as unknown as ChangeBindingKindRequest } };
+    }
     case "promoteLocal": {
       const id = resolved();
       if (id === undefined) return { ok: false, reason: "staged promotion requires one uniquely resolved local" };
@@ -232,6 +238,7 @@ function normalizeOperation(
       };
     }
     case "extractFunction":
+    case "introduceBinding":
     case "generateDeclaration":
     case "repairOwnership":
       return {
