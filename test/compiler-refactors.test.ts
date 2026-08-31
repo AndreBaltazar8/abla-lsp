@@ -56,6 +56,33 @@ test("advanced refactors pass the real compiler prospective validator", {
   });
   assert.deepEqual(validated.valid, true, validated.reason ?? "compiler rejected the refactor");
 
+  const inline = new AdvancedRefactors(index).inlineSymbol({ symbolId: length?.id ?? "" });
+  assert.equal(inline.ok, true);
+  if (!inline.ok) return;
+  const inlineEdits: CompilerTextEdit[] = Object.entries(inline.edit.changes ?? {}).flatMap(
+    ([editUri, values]) => {
+      const analysis = index.document(editUri);
+      assert.notEqual(analysis, undefined);
+      const positions = new PositionMap(analysis?.text ?? "");
+      return values.map((edit) => {
+        const start = positions.offset(edit.range.start);
+        const end = positions.offset(edit.range.end);
+        return {
+          uri: editUri,
+          start: Buffer.byteLength((analysis?.text ?? "").slice(0, start), "utf8"),
+          end: Buffer.byteLength((analysis?.text ?? "").slice(0, end), "utf8"),
+          newText: edit.newText,
+        };
+      });
+    },
+  );
+  const inlineValidated = await client.validate({
+    baseRevision: snapshot.revision,
+    edits: inlineEdits,
+    invariants: ["no-new-errors", "preserve-unedited-symbols"],
+  });
+  assert.equal(inlineValidated.valid, true, inlineValidated.reason ?? "compiler rejected block inline");
+
   const targetUri = pathToFileURL(path.join(root, "staged-target.ab")).href;
   const staged = await applyStagedRecipe(snapshot, [
     {

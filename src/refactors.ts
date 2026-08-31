@@ -216,6 +216,26 @@ function replaceWords(expression: string, replacements: ReadonlyMap<string, stri
   });
 }
 
+function expressionFromBlock(body: string): string | undefined {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return undefined;
+  const lines = trimmed.slice(1, -1).trim().split(/\r?\n/u)
+    .map((line) => line.trim()).filter((line) => line !== "");
+  if (lines.length !== 1 || lines[0] === undefined) return undefined;
+  const returned = /^return\s+(.+)$/su.exec(lines[0]);
+  if (returned?.[1] !== undefined) return returned[1].trim();
+  if (/^(?:val|var|own|fun|class|interface|enum|type|if|while|for|return|break|continue|defer)\b/u.test(lines[0])) {
+    return undefined;
+  }
+  return lines[0];
+}
+
+function indentedBlock(body: string, indentation: string): string {
+  return body.trim().split(/\r?\n/u)
+    .map((line, index) => index === 0 ? line : `${indentation}${line}`)
+    .join("\n");
+}
+
 function receiverBeforeMember(text: string, memberStart: number): OffsetRange | undefined {
   let end = memberStart;
   while (end > 0 && /\s/u.test(text[end - 1] ?? "")) end -= 1;
@@ -613,9 +633,16 @@ export class AdvancedRefactors {
     const remove = request.removeDeclaration ?? true;
     if (resolved.symbol.kind === "function") {
       const target = this.#function(resolved.symbol.id);
-      if (target?.body === undefined || target.bodyRange === undefined || target.body.trimStart().startsWith("{")) {
-        return failure("only expression-bodied functions can currently be inlined");
+      if (target?.body === undefined || target.bodyRange === undefined) {
+        return failure("the function has no body to inline");
       }
+      const block = target.body.trimStart().startsWith("{");
+      const blockExpression = block ? expressionFromBlock(target.body) : undefined;
+      if (block && blockExpression === undefined &&
+        /\b(?:return|break|continue|defer)\b/u.test(target.body)) {
+        return failure("a block with escaping control flow cannot be inlined safely");
+      }
+      const substitutionBody = blockExpression ?? target.body.trim();
       const calls = this.#calls(resolved.symbol);
       for (const call of calls) {
         if (call.arguments.length !== target.parameters.length) return failure("one call does not match the function signature");
@@ -624,11 +651,33 @@ export class AdvancedRefactors {
           const parameter = target.parameters[index];
           const argument = call.arguments[index];
           if (parameter === undefined || argument === undefined) continue;
-          const uses = target.body.match(new RegExp(`\\b${parameter.name}\\b`, "gu"))?.length ?? 0;
+          const uses = substitutionBody.match(new RegExp(`\\b${parameter.name}\\b`, "gu"))?.length ?? 0;
           if (uses > 1 && !pureExpression(argument)) return failure(`inlining would evaluate '${argument}' more than once`);
           replacements.set(parameter.name, argument);
         }
-        edits.push({ uri: call.analysis.uri, range: call.range, newText: `(${replaceWords(target.body.trim(), replacements)})` });
+        if (!block || blockExpression !== undefined) {
+          edits.push({
+            uri: call.analysis.uri,
+            range: call.range,
+            newText: `(${replaceWords(substitutionBody, replacements)})`,
+          });
+          continue;
+        }
+        const lineStart = call.analysis.text.lastIndexOf("\n", Math.max(0, call.range.start - 1)) + 1;
+        const candidateEnd = call.analysis.text.indexOf("\n", call.range.end);
+        const lineEnd = candidateEnd < 0 ? call.analysis.text.length : candidateEnd;
+        if (call.analysis.text.slice(lineStart, lineEnd).trim() !==
+          call.analysis.text.slice(call.range.start, call.range.end)) {
+          return failure("a multi-statement block can only inline at a standalone call");
+        }
+        const indentation = /^\s*/u.exec(
+          call.analysis.text.slice(lineStart, call.range.start),
+        )?.[0] ?? "";
+        edits.push({
+          uri: call.analysis.uri,
+          range: call.range,
+          newText: indentedBlock(replaceWords(substitutionBody, replacements), indentation),
+        });
       }
     } else if (resolved.symbol.kind === "value" || resolved.symbol.kind === "variable") {
       const raw = resolved.analysis.text.slice(resolved.symbol.range.start, resolved.symbol.range.end);

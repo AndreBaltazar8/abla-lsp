@@ -142,6 +142,43 @@ test("inline function substitutes parameters once and removes the declaration", 
   assert.match(output, /\(\(41\) \+ 1\)/u);
 });
 
+test("inline reduces a single-expression block at expression call sites", () => {
+  const uri = "file:///workspace/main.ab";
+  const text = "fun increment(value: int): int {\n    value + 1\n}\nfun main: int = increment(41)\n";
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  compilerDocument(index, uri, text);
+  const symbol = index.symbols().find((candidate) => candidate.name === "increment");
+  const result = new AdvancedRefactors(index).inlineSymbol({ symbolId: symbol?.id ?? "" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const output = apply(text, uri, result.edit);
+  assert.doesNotMatch(output, /fun increment/u);
+  assert.match(output, /\(\(41\) \+ 1\)/u);
+});
+
+test("inline preserves a multi-statement block at standalone calls", () => {
+  const uri = "file:///workspace/main.ab";
+  const text = [
+    "fun consume(value: int): void {",
+    "    val copy = value",
+    "    print(copy)",
+    "}",
+    "fun main(): void {",
+    "    consume(42)",
+    "}",
+    "",
+  ].join("\n");
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  compilerDocument(index, uri, text);
+  const symbol = index.symbols().find((candidate) => candidate.name === "consume");
+  const result = new AdvancedRefactors(index).inlineSymbol({ symbolId: symbol?.id ?? "" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const output = apply(text, uri, result.edit);
+  assert.doesNotMatch(output, /fun consume/u);
+  assert.match(output, /fun main\(\): void \{\n    \{\n        val copy = \(42\)\n        print\(copy\)\n    \}\n\}/u);
+});
+
 test("extract interface copies selected method signatures", () => {
   const uri = "file:///workspace/main.ab";
   const text = "class Greeter(val prefix: string) {\n    fun greet(name: string): string = prefix\n    fun count(): int = 1\n}\n";
