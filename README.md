@@ -1,40 +1,85 @@
 # Abla Language Server
 
-`abla-lsp` is the editor-independent language server and refactoring engine
-for Abla. It is a separate repository because protocol compatibility, editor
-packaging, and refactoring UX have a different release lifecycle from the
-compiler. Semantic truth remains owned by `ablac` through a versioned analysis
-protocol; this project never grows a second Abla type checker.
+`abla-lsp` is the editor-independent language server and transactional
+refactoring engine for Abla. It is a separate project because editor protocol,
+packaging, and UX evolve independently; semantic truth remains in `ablac`
+through the versioned `ablac analyze --stdio` protocol.
 
-The first milestone establishes a real LSP transport, document lifecycle,
-workspace index, diagnostics, symbols, navigation, references, and conservative
-rename support. Until the compiler analysis protocol is connected, the server
-labels its built-in source scanner as syntax-only and refuses ambiguous edits.
+The current server provides compiler diagnostics for saved files and unsaved
+overlays, canonical definitions/declarations/type definitions/references,
+document and workspace symbols, hover and signatures, scope/import-aware and
+typed-member completion, semantic tokens, compiler-resolved parameter inlay
+hints, document highlights, call hierarchy, folding and selection ranges,
+safe whitespace formatting, import organization, and import links. If the
+compiler is unavailable it restarts with bounded backoff and keeps a clearly
+labelled, conservative syntax mode available.
+
+Two transactional workspace refactors are included:
+
+- normal and multi-cursor bulk rename use canonical compiler identities and
+  validate the complete prospective overlay before returning an edit;
+- one or many top-level declarations can move to another file in one edit,
+  preserving attached comments, repairing imports in both directions, and
+  rejecting collisions, cycles, or new compiler diagnostics.
 
 ## Development
 
-Requires Node.js 20 or newer.
+Node.js 20 or newer and an `ablac` with analysis protocol version 1 are
+required for semantic features.
 
 ```sh
-npm install
-npm test
-node dist/src/main.js --stdio
+npm ci
+npm run validate
+ABLA_COMPILER=/path/to/ablac node dist/src/main.js --stdio
 ```
 
-## Product coverage
+`npm run validate` builds and tests the protocol server, creates a dry-run npm
+package, builds the bundled VS Code client, and produces a VSIX under
+`editors/vscode/`. The VSIX contains the server; only `ablac` is external.
 
-The completion contract includes:
+## Editor commands
 
-- compiler diagnostics for open overlays and saved workspace files;
-- completion, hover, signatures, definitions, implementations, references,
-  document/workspace symbols, call hierarchy, type hierarchy, inlay hints, and
-  semantic tokens;
-- formatting, quick fixes, source actions, and import organization;
-- semantic prepare-rename and workspace-wide bulk rename;
-- previewable single or multi-declaration moves across files with dependency,
-  import, visibility, collision, and cycle repair;
-- incremental analysis, cancellation, bounded resource use, deterministic
-  edits, editor integration, compatibility tests, and release artifacts.
+The VS Code extension adds:
 
-See [docs/architecture.md](docs/architecture.md) for the compiler boundary and
-[docs/coverage.md](docs/coverage.md) for the feature gate.
+- **Abla: Rename Symbols at All Cursors**
+- **Abla: Move Selected Declarations to File**
+
+Any LSP client can call `workspace/executeCommand` directly:
+
+```json
+{
+  "command": "abla.renameSymbols",
+  "arguments": [{
+    "renames": [{
+      "uri": "file:///project/src/main.ab",
+      "position": { "line": 4, "character": 8 },
+      "newName": "updatedName"
+    }]
+  }]
+}
+```
+
+```json
+{
+  "command": "abla.moveDeclarations",
+  "arguments": [{
+    "selections": [{
+      "uri": "file:///project/src/main.ab",
+      "position": { "line": 4, "character": 8 }
+    }],
+    "targetUri": "file:///project/src/helpers.ab"
+  }]
+}
+```
+
+Set `apply: true` when the server should submit the validated workspace edit to
+the client; otherwise the edit is returned for preview.
+
+## Coverage status
+
+The remaining production gates are compiler provenance for all generated and
+subparser diagnostics, implementation and type hierarchies, complete package
+and generated-symbol completion visibility, quick-fix/fix-all actions, and
+corpus-level performance/memory validation. They are intentionally not claimed
+as complete yet. See [docs/coverage.md](docs/coverage.md) and
+[docs/architecture.md](docs/architecture.md).

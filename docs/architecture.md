@@ -14,11 +14,13 @@ The language server lives here rather than inside `ablac`.
 
 The boundary is a persistent `ablac analyze --stdio` service using JSON lines.
 Every message carries a schema version and request id. The server sends
-workspace roots, manifest state, document open/change/close overlays, analysis
-requests, cancellation, and refactoring validation requests. The compiler
-returns immutable snapshots containing diagnostics, declarations, canonical
-symbol ids, references, types, call edges, effects, imports, generated-source
-provenance, and exact UTF-8 source spans.
+workspace roots, document open/change/close overlays, analysis requests,
+cancellation notifications, and refactoring validation requests. Protocol 1
+currently returns immutable snapshots containing diagnostics, declarations,
+canonical symbol ids, references, resolved occurrence types, and exact UTF-8
+source spans. Call/type relationships, import metadata, effects, and complete
+generated-source provenance will be added only as versioned protocol fields;
+the LSP does not infer them as semantic fact.
 
 The compiler protocol is not LSP-shaped. That keeps editor policy out of the
 compiler and lets other tools consume the same semantic snapshots.
@@ -34,11 +36,11 @@ name matching. A refactor has three phases:
    ownership, effects, generated syntax, and diagnostics satisfy the command's
    invariants.
 
-Moving declarations uses compiler-provided full declaration ranges and
-dependency edges. Multiple declarations are moved as one transaction. The
-engine preserves source order and attached comments, rejects partial generated
-declarations, repairs imports in both directions, and refuses a result with a
-new collision, import cycle, or inaccessible dependency.
+Moving declarations uses compiler-provided canonical declaration ranges and
+resolved occurrences. Multiple declarations are moved as one transaction. The
+engine preserves the requested order and attached line comments, repairs
+relative imports in both directions, rejects cycles locally, and asks the
+compiler to reject new diagnostics or changes to symbols in untouched files.
 
 ## Degraded mode
 

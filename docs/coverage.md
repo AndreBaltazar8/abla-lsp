@@ -2,18 +2,22 @@
 
 No feature is considered complete merely because an LSP method responds.
 
-| Area | Required evidence |
-| --- | --- |
-| Documents | UTF-8/UTF-16 position tests, incremental changes, unsaved overlays, close/reopen, cancellation |
-| Diagnostics | Parser, generated/subparser, semantic, ownership, effect, IR-boundary, related spans, stable codes |
-| Navigation | Definitions, declarations, types, implementations, references, workspace/document symbols |
-| Assistance | Completion and resolve, hover, signatures, semantic tokens, inlay hints, folding, selection ranges |
-| Source actions | Formatting, import organization, quick fixes, fix-all, source actions |
-| Rename | Prepare checks, locals/members/types/import aliases, workspace edits, collisions, generated syntax |
-| Move | One or many declarations, attached comments, imports, visibility, dependencies, cycles, preview/undo |
-| Hierarchies | Incoming/outgoing calls and type supertypes/subtypes |
-| Operations | Incremental performance, memory bounds, crash recovery, logs, configuration, packaging |
-| Editors | VS Code first, protocol-level tests for any compliant editor, TextMate fallback |
+| Area | Current status | Required evidence |
+| --- | --- | --- |
+| Documents | Partial | UTF-8/UTF-16 positions, incremental LSP changes, overlays, close/reopen, and client cancellation are tested; compiler-side preemption remains |
+| Diagnostics | Partial | Parser and semantic spans/codes are tested; generated/subparser provenance, related spans, ownership/effect, and IR-boundary diagnostics remain |
+| Navigation | Partial | Definitions, declarations, type definitions, references, document/workspace symbols, and highlights are live; implementation relationships remain |
+| Assistance | Partial | Scope/import/member completion, hover, signatures, semantic tokens, parameter hints, folding, and selection ranges are live; package/generated completion and completion resolve remain |
+| Source actions | Partial | Safe whitespace formatting, import organization, and compiler-validated spelling fixes are live; full formatting and fix-all remain |
+| Rename | Advanced | Canonical locals/members/types, atomic bulk swaps, component scoping, collisions, and compiler validation are tested; generated declarations and import aliases need corpus gates |
+| Move | Advanced | One/many declarations, attached line comments, header-safe import repair, dependencies, cycles, preview/apply, and compiler validation are tested; generated declarations and richer visibility metadata remain |
+| Hierarchies | Partial | Incoming/outgoing calls are live; language-level implementation/type relationships need compiler protocol support |
+| Operations | Partial | Crash recovery, bounded restart, logs, configuration, npm/VSIX packaging, and multi-OS CI are live; corpus performance and memory budgets remain |
+| Editors | Implemented | VS Code bundles the server, uses the TextMate extension as fallback, and exposes multi-cursor rename/move; protocol tests cover editor-independent behavior |
 
 Every semantic feature is tested against the same checked-in Abla corpus used
 by the compiler plus focused multi-file and generated-syntax fixtures.
+
+A release is cut only after `npm run validate`, the compiler analysis protocol
+suite, the compiler's 76-case self-hosted suite, and byte-identical pure
+self-rebuild all pass from the release commits.
