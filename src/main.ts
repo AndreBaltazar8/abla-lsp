@@ -125,6 +125,78 @@ function completionKind(symbol: AblaSymbol): CompletionItemKind {
   }
 }
 
+function completionSymbols(
+  analysis: DocumentAnalysis,
+  offset: number,
+  identifierBegin: number,
+): readonly AblaSymbol[] {
+  if (identifierBegin > 0 && analysis.text[identifierBegin - 1] === ".") {
+    let receiverBegin = identifierBegin - 1;
+    while (
+      receiverBegin > 0 &&
+      /[A-Za-z0-9_]/u.test(analysis.text[receiverBegin - 1] ?? "")
+    ) receiverBegin -= 1;
+    const receiver = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.range.start === receiverBegin &&
+        occurrence.range.end === identifierBegin - 1,
+    );
+    const typeNames: readonly string[] =
+      receiver?.type?.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+    const owners = index.symbols().filter(
+      (symbol) =>
+        (symbol.kind === "class" || symbol.kind === "interface") &&
+        typeNames.includes(symbol.name),
+    );
+    if (owners.length === 1 && owners[0] !== undefined) {
+      return index.symbols().filter((symbol) => symbol.containerId === owners[0]?.id);
+    }
+    return [];
+  }
+
+  const visible = new Map<string, AblaSymbol>();
+  const add = (symbol: AblaSymbol): void => {
+    visible.set(symbol.id, symbol);
+  };
+  for (const symbol of analysis.symbols) {
+    if (symbol.topLevel) add(symbol);
+  }
+  const owner = index.containingSymbol(analysis.uri, { start: offset, end: offset });
+  if (owner !== undefined) {
+    add(owner.symbol);
+    for (const symbol of analysis.symbols) {
+      if (symbol.containerId === owner.symbol.id) add(symbol);
+    }
+  }
+  if (analysis.uri.startsWith("file:")) {
+    const imports = /^\s*import\s+(?:contract\s+)?"([^"\r\n]+)"/gmu;
+    for (const match of analysis.text.matchAll(imports)) {
+      const requested = match[1];
+      if (requested === undefined || requested.startsWith("abla/")) continue;
+      try {
+        const importer = fileURLToPath(analysis.uri);
+        const importedUri = pathToFileURL(
+          path.resolve(path.dirname(importer), requested),
+        ).href;
+        for (const symbol of index.document(importedUri)?.symbols ?? []) {
+          if (symbol.topLevel) add(symbol);
+        }
+      } catch {
+        // Non-filesystem imports are supplied by the compiler in later schemas.
+      }
+    }
+  }
+  if (analysis.authority === "syntax") {
+    for (const symbol of index.symbols()) {
+      if (symbol.topLevel &&
+        index.symbols().filter((candidate) =>
+          candidate.topLevel && candidate.name === symbol.name,
+        ).length === 1) add(symbol);
+    }
+  }
+  return [...visible.values()];
+}
+
 function semanticTokenType(symbol: AblaSymbol): number {
   switch (symbol.kind) {
     case "function":
@@ -582,7 +654,7 @@ connection.onCompletion((params): CompletionItem[] => {
   while (begin > 0 && /[A-Za-z0-9_]/.test(analysis.text[begin - 1] ?? "")) begin -= 1;
   const prefix = analysis.text.slice(begin, offset).toLocaleLowerCase();
   const items = new Map<string, CompletionItem>();
-  for (const symbol of index.symbols()) {
+  for (const symbol of completionSymbols(analysis, offset, begin)) {
     if (prefix !== "" && !symbol.name.toLocaleLowerCase().startsWith(prefix)) continue;
     const resolved = index.symbolById(symbol.id);
     items.set(symbol.name, {
@@ -592,14 +664,16 @@ connection.onCompletion((params): CompletionItem[] => {
       sortText: `0-${symbol.name}`,
     });
   }
-  for (const keyword of ablaKeywords) {
-    if (prefix !== "" && !keyword.startsWith(prefix)) continue;
-    if (!items.has(keyword)) {
-      items.set(keyword, {
-        label: keyword,
-        kind: CompletionItemKind.Keyword,
-        sortText: `1-${keyword}`,
-      });
+  if (!(begin > 0 && analysis.text[begin - 1] === ".")) {
+    for (const keyword of ablaKeywords) {
+      if (prefix !== "" && !keyword.startsWith(prefix)) continue;
+      if (!items.has(keyword)) {
+        items.set(keyword, {
+          label: keyword,
+          kind: CompletionItemKind.Keyword,
+          sortText: `1-${keyword}`,
+        });
+      }
     }
   }
   return [...items.values()].slice(0, 250);

@@ -220,8 +220,9 @@ test("stdio server initializes and serves symbols and rename", async () => {
   await client.stop();
 });
 
-test("compiler snapshots drive type definitions", async () => {
+test("compiler snapshots drive type definitions", async (context) => {
   const client = new LspClient();
+  context.after(async () => client.stop().catch(() => undefined));
   await client.request("initialize", {
     processId: process.pid,
     rootUri: null,
@@ -251,6 +252,7 @@ test("compiler snapshots drive type definitions", async () => {
         "fun make(): Widget = Widget()",
         "fun build(name: string, count: int): int = count",
         'fun main: int = build("x", 2)',
+        "fun show(widget: Widget): int = widget.",
         "",
       ].join("\n"),
     },
@@ -269,12 +271,20 @@ test("compiler snapshots drive type definitions", async () => {
     textDocument: { uri },
     range: {
       start: { line: 0, character: 0 },
-      end: { line: 4, character: 0 },
+      end: { line: 5, character: 0 },
     },
   });
   assert.deepEqual(
     (inlayHints.result as Array<{ label: string }>).map((hint) => hint.label),
     ["name:", "count:"],
   );
-  await client.stop();
+
+  const memberCompletion = await client.request("textDocument/completion", {
+    textDocument: { uri },
+    position: { line: 4, character: 39 },
+  });
+  assert.deepEqual(
+    (memberCompletion.result as Array<{ label: string }>).map((item) => item.label),
+    ["render"],
+  );
 });

@@ -42,6 +42,13 @@ input.on("line", (line) => {
                 selectionRange: { start: widget, end: widget + 6 },
                 detail: "class Widget", topLevel: true,
               });
+              symbols.push({
+                id: `${document.uri}#Widget#render`, name: "render", kind: "function",
+                uri: document.uri, range: { start: widget, end: widget + 6 },
+                selectionRange: { start: widget, end: widget + 6 },
+                detail: "fun int", topLevel: false,
+                containerId: `${document.uri}#Widget`,
+              });
               occurrences.push({
                 name: "Widget", range: { start: widget, end: widget + 6 },
                 declarationId: `${document.uri}#Widget`, type: "Widget",
@@ -51,6 +58,11 @@ input.on("line", (line) => {
                 declarationId: `${document.uri}#Widget`, type: "Widget",
               });
             }
+            const receiver = document.text.lastIndexOf("widget");
+            if (receiver >= 0) occurrences.push({
+              name: "widget", range: { start: receiver, end: receiver + 6 },
+              type: "Widget",
+            });
             if (make >= 0) {
               symbols.push({
                 id: `${document.uri}#make`, name: "make", kind: "function",
