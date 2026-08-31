@@ -17,6 +17,7 @@ class LspClient {
   readonly #pending = new Map<number, (message: RpcMessage) => void>();
   #buffer = Buffer.alloc(0);
   #nextId = 1;
+  readonly appliedEdits: unknown[] = [];
   readonly #notificationWaiters = new Map<
     string,
     Array<{ readonly matches: (params: unknown) => boolean; readonly resolve: (params: unknown) => void }>
@@ -90,7 +91,10 @@ class LspClient {
         this.#buffer.subarray(bodyBegin, bodyBegin + length).toString("utf8"),
       ) as RpcMessage;
       this.#buffer = this.#buffer.subarray(bodyBegin + length);
-      if (message.id !== undefined) {
+      if (message.id !== undefined && message.method === "workspace/applyEdit") {
+        this.appliedEdits.push(message.params);
+        this.#send({ jsonrpc: "2.0", id: message.id, result: { applied: true } });
+      } else if (message.id !== undefined) {
         const resolve = this.#pending.get(message.id);
         if (resolve !== undefined) {
           this.#pending.delete(message.id);
@@ -106,6 +110,41 @@ class LspClient {
       }
     }
   }
+}
+
+interface ProtocolWorkspaceEdit {
+  readonly changes?: Record<string, Array<{ readonly newText: string }>>;
+  readonly documentChanges?: Array<
+    | { readonly kind: "create"; readonly uri: string }
+    | {
+        readonly textDocument: { readonly uri: string };
+        readonly edits: Array<{ readonly newText: string }>;
+      }
+  >;
+}
+
+function editText(edit: ProtocolWorkspaceEdit): string {
+  const changes = Object.values(edit.changes ?? {}).flatMap((edits) =>
+    edits.map((candidate) => candidate.newText));
+  const documentChanges = (edit.documentChanges ?? []).flatMap((change) =>
+    "textDocument" in change ? change.edits.map((candidate) => candidate.newText) : []);
+  return [...changes, ...documentChanges].join("\n");
+}
+
+function sourcePosition(text: string, needle: string, from = 0): { line: number; character: number } {
+  const offset = text.indexOf(needle, from);
+  assert.notEqual(offset, -1, `missing source text: ${needle}`);
+  const prefix = text.slice(0, offset);
+  const lines = prefix.split("\n");
+  return { line: lines.length - 1, character: lines.at(-1)?.length ?? 0 };
+}
+
+function sourceRange(text: string, needle: string, from = 0) {
+  const start = sourcePosition(text, needle, from);
+  return {
+    start,
+    end: { line: start.line, character: start.character + needle.length },
+  };
 }
 
 test("stdio server initializes and serves symbols and rename", async () => {
@@ -306,4 +345,206 @@ test("compiler snapshots drive type definitions", async (context) => {
     edit: { changes: Record<string, Array<{ newText: string }>> };
   }>;
   assert.equal(fixes[0]?.edit.changes[uri]?.[0]?.newText, "build");
+});
+
+test("execute-command refactors are compiler validated and applied as workspace edits", async (context) => {
+  const client = new LspClient();
+  context.after(async () => client.stop().catch(() => undefined));
+  const initialize = await client.request("initialize", {
+    processId: process.pid,
+    rootUri: null,
+    capabilities: { workspace: { applyEdit: true } },
+    initializationOptions: {
+      compiler: {
+        enabled: true,
+        path: process.execPath,
+        arguments: [path.resolve("test/fixtures/refactor-ablac.mjs")],
+      },
+    },
+  });
+  const advertised = (initialize.result as {
+    capabilities: { executeCommandProvider: { commands: string[] } };
+  }).capabilities.executeCommandProvider.commands;
+  assert.deepEqual(advertised, [
+    "abla.renameSymbols",
+    "abla.moveDeclarations",
+    "abla.moveTypes",
+    "abla.splitDeclarations",
+    "abla.mergeDeclarations",
+    "abla.changeSignature",
+    "abla.extractFunction",
+    "abla.functionToMethod",
+    "abla.methodToFunction",
+    "abla.inlineSymbol",
+    "abla.introduceBinding",
+    "abla.changeBindingKind",
+    "abla.promoteLocal",
+    "abla.extractInterface",
+    "abla.generateDeclaration",
+    "abla.repairOwnership",
+    "abla.toggleCompileTime",
+    "abla.removeDeadCode",
+    "abla.applyRefactorRecipe",
+    "abla.applyStagedRefactorRecipe",
+  ]);
+  client.notify("initialized", {});
+
+  const uri = "file:///workspace/refactors.ab";
+  const targetUri = "file:///workspace/moved.ab";
+  const text = [
+    "class Point(val x: int)",
+    "class Greeter(val prefix: string) {",
+    "    fun greet(name: string): string = prefix",
+    "}",
+    "fun Point.scaled(scale: int): int = this.x * scale",
+    "val defaultScale: int = 2",
+    "fun length(point: Point, scale: int): int = point.x * scale",
+    "fun increment(value: int): int = value + 1",
+    "fun _unused: int = 1",
+    "fun main(): int {",
+    "    val answer: int = increment(length(Point(20), defaultScale))",
+    "    val total: int = 20 + 22",
+    "    answer + total",
+    "}",
+    "fun missingUse: int = missing(2)",
+    "",
+  ].join("\n");
+  const compilerReady = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (params) =>
+      (params as { uri?: string; diagnostics?: Array<{ source?: string }> }).uri === uri &&
+      (params as { diagnostics?: Array<{ source?: string }> }).diagnostics?.[0]?.source === "ablac",
+  );
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "abla", version: 1, text },
+  });
+  await compilerReady;
+
+  const selection = (needle: string, from = 0) => {
+    const position = sourcePosition(text, needle, from);
+    return { uri, position: { ...position, character: position.character + 1 } };
+  };
+  const execute = async (
+    command: string,
+    argument: Record<string, unknown>,
+  ): Promise<ProtocolWorkspaceEdit> => {
+    const appliedBefore = client.appliedEdits.length;
+    const response = await client.request("workspace/executeCommand", {
+      command,
+      arguments: [{ ...argument, apply: true }],
+    });
+    assert.equal(response.error, undefined, `${command}: ${JSON.stringify(response.error)}`);
+    assert.notEqual(response.result, null, `${command} returned no edit`);
+    assert.equal(client.appliedEdits.length, appliedBefore + 1, `${command} was not applied`);
+    const applied = client.appliedEdits.at(-1) as { edit?: ProtocolWorkspaceEdit };
+    assert.deepEqual(applied.edit, response.result, `${command} applied a different edit`);
+    return response.result as ProtocolWorkspaceEdit;
+  };
+
+  const renamed = await execute("abla.renameSymbols", {
+    renames: [{ ...selection("length"), newName: "distance" }],
+  });
+  assert.match(editText(renamed), /distance/u);
+
+  const moved = await execute("abla.moveDeclarations", {
+    selections: [selection("increment")], targetUri, createTarget: true,
+  });
+  assert.ok(moved.documentChanges?.some(
+    (change) => "kind" in change && change.kind === "create" && change.uri === targetUri,
+  ));
+  assert.match(editText(moved), /fun increment/u);
+
+  const signature = await execute("abla.changeSignature", {
+    selection: selection("length"),
+    parameters: [
+      { name: "scale", source: "scale" },
+      { name: "point", source: "point" },
+    ],
+  });
+  assert.match(editText(signature), /scale: int, point: Point/u);
+
+  const extracted = await execute("abla.extractFunction", {
+    uri, range: sourceRange(text, "20 + 22"), name: "computeTotal", returnType: "int",
+  });
+  assert.match(editText(extracted), /computeTotal/u);
+
+  const method = await execute("abla.functionToMethod", {
+    selection: selection("length"), receiver: "point",
+  });
+  assert.match(editText(method), /Point\.length/u);
+
+  const functionEdit = await execute("abla.methodToFunction", {
+    selection: selection("scaled"), receiverName: "point",
+  });
+  assert.match(editText(functionEdit), /fun scaled\(point: Point/u);
+
+  const inlined = await execute("abla.inlineSymbol", {
+    selection: selection("increment"),
+  });
+  assert.match(editText(inlined), /value \+ 1|\+ 1/u);
+
+  const introduced = await execute("abla.introduceBinding", {
+    uri, range: sourceRange(text, "20 + 22"), name: "computed", destination: "local",
+  });
+  assert.match(editText(introduced), /val computed = 20 \+ 22/u);
+
+  const binding = await execute("abla.changeBindingKind", {
+    selection: selection("defaultScale"), kind: "var",
+  });
+  assert.match(editText(binding), /var/u);
+
+  const promoted = await execute("abla.promoteLocal", {
+    selection: selection("answer"), destination: "parameter",
+  });
+  assert.match(editText(promoted), /answer: int = increment/u);
+
+  const interfaceEdit = await execute("abla.extractInterface", {
+    selections: [selection("greet")], name: "Greeting",
+  });
+  assert.match(editText(interfaceEdit), /interface Greeting/u);
+
+  const declaration = await execute("abla.generateDeclaration", {
+    ...selection("missing", text.indexOf("= missing")), resultType: "int",
+  });
+  assert.match(editText(declaration), /fun missing\(argument1: int\): int/u);
+
+  const ownership = await execute("abla.repairOwnership", {
+    uri, range: sourceRange(text, "Point(20)"), strategy: "move",
+  });
+  assert.match(editText(ownership), /move\(Point\(20\)\)/u);
+
+  const compileTime = await execute("abla.toggleCompileTime", {
+    selection: selection("increment"), compileTime: true,
+  });
+  assert.match(editText(compileTime), /compile |#/u);
+
+  const deadCode = await execute("abla.removeDeadCode", {});
+  assert.ok(Object.values(deadCode.changes ?? {}).flat().some((edit) => edit.newText === ""));
+
+  const recipe = await execute("abla.applyRefactorRecipe", {
+    operations: [{
+      kind: "repairOwnership",
+      request: { uri, range: sourceRange(text, "defaultScale"), strategy: "borrow" },
+    }],
+  });
+  assert.match(editText(recipe), /borrow\(defaultScale\)/u);
+
+  const staged = await execute("abla.applyStagedRefactorRecipe", {
+    operations: [
+      {
+        kind: "move",
+        request: {
+          symbols: [{ uri, name: "increment" }], targetUri, createTarget: true,
+        },
+      },
+      {
+        kind: "rename",
+        request: { symbol: { uri: targetUri, name: "increment" }, newName: "next" },
+      },
+    ],
+  });
+  assert.ok(staged.documentChanges?.some(
+    (change) => "kind" in change && change.kind === "create" && change.uri === targetUri,
+  ));
+  assert.match(editText(staged), /fun next/u);
 });
