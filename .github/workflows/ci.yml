@@ -42,7 +42,7 @@ jobs:
             editors/vscode/package-lock.json
       - uses: AndreBaltazar8/setup-abla@v1
         with:
-          version: "0.2.12"
+          version: "0.2.13"
       - run: npm ci
       - run: npm ci --prefix editors/vscode
       - run: npm test

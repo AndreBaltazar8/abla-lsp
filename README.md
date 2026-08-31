@@ -35,8 +35,8 @@ safety boundaries.
 
 ## Development
 
-Node.js 20 or newer and an `ablac` with analysis protocol version 1 are
-required for semantic features.
+Node.js 20 or newer and Abla 0.2.13 or newer with analysis protocol version 1
+are required for the complete semantic and new-file refactor feature set.
 
 ```sh
 npm ci
