@@ -63,6 +63,9 @@ let compiler: CompilerClient | undefined;
 let compilerRevision: string | undefined;
 let compilerAnalysis: AbortController | undefined;
 let compilerAnalysisTimer: ReturnType<typeof setTimeout> | undefined;
+let compilerRestartTimer: ReturnType<typeof setTimeout> | undefined;
+let compilerRestartAttempt = 0;
+let shuttingDown = false;
 
 interface InitializationOptions {
   readonly compiler?: {
@@ -244,12 +247,25 @@ connection.onInitialized(() => {
 });
 
 async function startCompiler(): Promise<void> {
-  const candidate = new CompilerClient({
+  let candidate: CompilerClient;
+  candidate = new CompilerClient({
     executable: compilerConfiguration.path,
     ...(compilerConfiguration.arguments === undefined
       ? {}
       : { arguments: compilerConfiguration.arguments }),
     log: (message) => connection.console.info(`ablac analyze: ${message}`),
+    onExit: (error) => {
+      if (compiler === candidate) compiler = undefined;
+      void indexWorkspace(connection, index, workspaceRoots);
+      for (const document of documents.all()) {
+        publishDiagnostics(index.upsert(
+          document.uri,
+          document.version,
+          document.getText(),
+        ));
+      }
+      scheduleCompilerRestart(error);
+    },
   });
   try {
     const initialized = await candidate.start({
@@ -263,6 +279,7 @@ async function startCompiler(): Promise<void> {
       );
     }
     compiler = candidate;
+    compilerRestartAttempt = 0;
     connection.console.info(
       `connected to ablac ${initialized.compilerVersion} analysis protocol 1`,
     );
@@ -279,7 +296,22 @@ async function startCompiler(): Promise<void> {
       `compiler analysis unavailable; continuing in syntax mode: ${String(error)}`,
     );
     await candidate.stop().catch(() => undefined);
+    scheduleCompilerRestart(error instanceof Error ? error : new Error(String(error)));
   }
+}
+
+function scheduleCompilerRestart(error: Error): void {
+  if (shuttingDown || !compilerConfiguration.enabled) return;
+  if (compilerRestartTimer !== undefined) clearTimeout(compilerRestartTimer);
+  const delay = Math.min(30_000, 500 * (2 ** Math.min(compilerRestartAttempt, 6)));
+  compilerRestartAttempt += 1;
+  connection.console.warn(
+    `compiler analysis will restart in ${delay}ms: ${error.message}`,
+  );
+  compilerRestartTimer = setTimeout(() => {
+    compilerRestartTimer = undefined;
+    if (compiler === undefined && !shuttingDown) void startCompiler();
+  }, delay);
 }
 
 function acceptCompilerSnapshot(snapshot: CompilerWorkspaceSnapshot): void {
@@ -751,13 +783,21 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
     const argument = params.arguments?.[0] as
       | {
           readonly symbolIds?: readonly string[];
+          readonly selections?: readonly {
+            readonly uri: string;
+            readonly position: { readonly line: number; readonly character: number };
+          }[];
           readonly targetUri?: string;
           readonly apply?: boolean;
         }
       | undefined;
     apply = argument?.apply === true;
+    const selectedIds = (argument?.selections ?? []).flatMap((selection) => {
+      const resolved = index.resolve(selection.uri, selection.position);
+      return resolved === undefined ? [] : [resolved.symbol.id];
+    });
     result = index.moveDeclarations({
-      symbolIds: argument?.symbolIds ?? [],
+      symbolIds: [...(argument?.symbolIds ?? []), ...selectedIds],
       targetUri: argument?.targetUri ?? "",
     });
   } else return null;
@@ -776,7 +816,9 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
 });
 
 connection.onShutdown(async () => {
+  shuttingDown = true;
   if (compilerAnalysisTimer !== undefined) clearTimeout(compilerAnalysisTimer);
+  if (compilerRestartTimer !== undefined) clearTimeout(compilerRestartTimer);
   compilerAnalysis?.abort(new Error("language server is shutting down"));
   await compiler?.stop();
   compiler = undefined;

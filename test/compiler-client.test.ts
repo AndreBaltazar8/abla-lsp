@@ -43,3 +43,22 @@ test("compiler client propagates cancellation", async () => {
   await assert.rejects(pending, /superseded analysis/);
   await compiler.stop();
 });
+
+test("compiler client reports an unexpected child exit", async () => {
+  let reportExit: (error: Error) => void = () => undefined;
+  const exited = new Promise<Error>((resolve) => {
+    reportExit = resolve;
+  });
+  const compiler = new CompilerClient({
+    executable: process.execPath,
+    arguments: [path.resolve("test/fixtures/fake-ablac.mjs")],
+    onExit: (error) => reportExit(error),
+  });
+  await compiler.start({
+    workspaceRoots: [],
+    clientName: "abla-lsp-test",
+    clientVersion: "0",
+  });
+  await assert.rejects(compiler.request("crash" as never, {}), /exited \(23\)/);
+  assert.match((await exited).message, /exited \(23\)/);
+});

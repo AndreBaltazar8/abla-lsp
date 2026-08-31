@@ -29,6 +29,7 @@ export interface CompilerClientOptions {
   readonly cwd?: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly log?: (message: string) => void;
+  readonly onExit?: (error: Error) => void;
 }
 
 export class CompilerProtocolError extends Error {
@@ -74,9 +75,11 @@ export class CompilerClient {
     child.once("exit", (code, signal) => {
       this.#process = undefined;
       if (!this.#stopping) {
-        this.#failAll(
-          new Error(`compiler analysis service exited (${code ?? signal ?? "unknown"})`),
+        const error = new Error(
+          `compiler analysis service exited (${code ?? signal ?? "unknown"})`,
         );
+        this.#failAll(error);
+        this.#options.onExit?.(error);
       }
     });
     return this.request<CompilerInitializeResult>("initialize", params);

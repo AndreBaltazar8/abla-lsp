@@ -35,6 +35,9 @@ input.on("line", (line) => {
     respond(message.id, { valid: true });
     return;
   }
+  if (message.method === "crash") {
+    process.exit(23);
+  }
   respond(message.id, null);
   if (message.method === "shutdown") setTimeout(() => process.exit(0), 5);
 });
