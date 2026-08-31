@@ -44,6 +44,70 @@
       {
         "command": "abla.bulkRename",
         "title": "Abla: Rename Symbols at All Cursors"
+      },
+      {
+        "command": "abla.moveTypes",
+        "title": "Abla: Move Selected Types to File"
+      },
+      {
+        "command": "abla.splitDeclarations",
+        "title": "Abla: Split Selected Declarations into File"
+      },
+      {
+        "command": "abla.mergeDeclarations",
+        "title": "Abla: Merge Selected Declarations into File"
+      },
+      {
+        "command": "abla.changeSignature",
+        "title": "Abla: Change Function Signature"
+      },
+      {
+        "command": "abla.extractFunction",
+        "title": "Abla: Extract Function"
+      },
+      {
+        "command": "abla.functionToMethod",
+        "title": "Abla: Convert Function to Method"
+      },
+      {
+        "command": "abla.methodToFunction",
+        "title": "Abla: Convert Method to Function"
+      },
+      {
+        "command": "abla.inlineSymbol",
+        "title": "Abla: Inline Symbol"
+      },
+      {
+        "command": "abla.promoteLocal",
+        "title": "Abla: Promote Local"
+      },
+      {
+        "command": "abla.extractInterface",
+        "title": "Abla: Extract Interface from Selected Methods"
+      },
+      {
+        "command": "abla.generateDeclaration",
+        "title": "Abla: Generate Declaration from Usage"
+      },
+      {
+        "command": "abla.repairOwnership",
+        "title": "Abla: Repair Ownership at Selection"
+      },
+      {
+        "command": "abla.makeCompileTime",
+        "title": "Abla: Make Function Compile-Time"
+      },
+      {
+        "command": "abla.makeRuntime",
+        "title": "Abla: Make Function Runtime"
+      },
+      {
+        "command": "abla.removeDeadCode",
+        "title": "Abla: Remove Proven Dead Code"
+      },
+      {
+        "command": "abla.applyRefactorRecipe",
+        "title": "Abla: Apply Refactor Recipe"
       }
     ],
     "configuration": {

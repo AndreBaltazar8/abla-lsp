@@ -8,3 +8,9 @@ selected for development. Syntax highlighting is supplied by the
 Use multiple cursors with **Abla: Rename Symbols at All Cursors** for an atomic
 bulk rename. Place cursors on one or more top-level declarations and run
 **Abla: Move Selected Declarations to File** for a preview-validated move.
+
+The command palette also provides declaration/type split and merge, change
+signature, extraction, inline, function/method conversion, local promotion,
+interface and missing-declaration generation, ownership repair, compile-time
+migration, dead-code removal, and JSON refactor recipes. Semantic edits are
+applied only after prospective compiler validation.
