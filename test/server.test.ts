@@ -82,6 +82,7 @@ test("stdio server initializes and serves symbols and rename", async () => {
     processId: process.pid,
     rootUri: null,
     capabilities: {},
+    initializationOptions: { compiler: { enabled: false } },
   });
   const initialization = initialize.result as {
     capabilities: { renameProvider: unknown; documentSymbolProvider: unknown };

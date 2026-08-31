@@ -30,8 +30,12 @@ export class WorkspaceIndex {
 
   upsert(uri: string, version: number, text: string): DocumentAnalysis {
     const analysis = this.#analyzer.analyze(uri, version, text);
-    this.#documents.set(uri, analysis);
+    this.upsertAnalysis(analysis);
     return analysis;
+  }
+
+  upsertAnalysis(analysis: DocumentAnalysis): void {
+    this.#documents.set(analysis.uri, analysis);
   }
 
   remove(uri: string): void {

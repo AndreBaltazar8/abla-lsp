@@ -26,6 +26,8 @@ import {
   type WorkspaceEdit,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
+import { CompilerClient } from "./compiler-client.js";
+import type { CompilerWorkspaceSnapshot } from "./compiler-protocol.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
 import { WorkspaceIndex, type RenameRequest } from "./index.js";
 import { PositionMap } from "./positions.js";
@@ -36,6 +38,22 @@ const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 const index = new WorkspaceIndex(new SyntaxAnalyzer());
 let workspaceRoots: string[] = [];
+let compilerConfiguration: {
+  readonly enabled: boolean;
+  readonly path: string;
+  readonly arguments?: readonly string[];
+} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac" };
+let compiler: CompilerClient | undefined;
+let compilerAnalysis: AbortController | undefined;
+let compilerAnalysisTimer: ReturnType<typeof setTimeout> | undefined;
+
+interface InitializationOptions {
+  readonly compiler?: {
+    readonly enabled?: boolean;
+    readonly path?: string;
+    readonly arguments?: readonly string[];
+  };
+}
 
 function symbolKind(symbol: AblaSymbol): SymbolKind {
   switch (symbol.kind) {
@@ -77,6 +95,13 @@ function publishDiagnostics(analysis: DocumentAnalysis): void {
 }
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
+  const initialization = params.initializationOptions as InitializationOptions | undefined;
+  const configured = initialization?.compiler;
+  compilerConfiguration = {
+    enabled: configured?.enabled ?? true,
+    path: configured?.path ?? process.env.ABLA_COMPILER ?? "ablac",
+    ...(configured?.arguments === undefined ? {} : { arguments: configured.arguments }),
+  };
   const roots = params.workspaceFolders?.map((folder) => folder.uri) ??
     (params.rootUri === null || params.rootUri === undefined ? [] : [params.rootUri]);
   workspaceRoots = roots.flatMap((uri) => {
@@ -102,6 +127,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         abla: {
           analysisAuthority: "syntax",
           compilerAnalysisProtocol: 1,
+          semanticState: compilerConfiguration.enabled ? "starting" : "disabled",
           transactionalRefactors: ["renameSymbols"],
         },
       },
@@ -114,18 +140,125 @@ connection.onInitialized(() => {
   void indexWorkspace(connection, index, workspaceRoots).catch((error: unknown) => {
     connection.console.error(`workspace indexing failed: ${String(error)}`);
   });
+  if (compilerConfiguration.enabled) void startCompiler();
 });
+
+async function startCompiler(): Promise<void> {
+  const candidate = new CompilerClient({
+    executable: compilerConfiguration.path,
+    ...(compilerConfiguration.arguments === undefined
+      ? {}
+      : { arguments: compilerConfiguration.arguments }),
+    log: (message) => connection.console.info(`ablac analyze: ${message}`),
+  });
+  try {
+    const initialized = await candidate.start({
+      workspaceRoots,
+      clientName: "abla-lsp",
+      clientVersion: "0.1.0-dev",
+    });
+    if (initialized.protocolVersion !== 1) {
+      throw new Error(
+        `compiler analysis protocol ${initialized.protocolVersion} is unsupported`,
+      );
+    }
+    compiler = candidate;
+    connection.console.info(
+      `connected to ablac ${initialized.compilerVersion} analysis protocol 1`,
+    );
+    for (const document of documents.all()) {
+      await candidate.open({
+        uri: document.uri,
+        version: document.version,
+        text: document.getText(),
+      });
+    }
+    scheduleCompilerAnalysis(0);
+  } catch (error) {
+    connection.console.warn(
+      `compiler analysis unavailable; continuing in syntax mode: ${String(error)}`,
+    );
+    await candidate.stop().catch(() => undefined);
+  }
+}
+
+function acceptCompilerSnapshot(snapshot: CompilerWorkspaceSnapshot): void {
+  for (const document of snapshot.documents) {
+    const analysis: DocumentAnalysis = {
+      authority: "compiler",
+      uri: document.uri,
+      version: document.version,
+      text: document.text,
+      symbols: document.symbols,
+      occurrences: document.occurrences,
+      diagnostics: document.diagnostics,
+    };
+    index.upsertAnalysis(analysis);
+    if (documents.get(document.uri) !== undefined) publishDiagnostics(analysis);
+  }
+}
+
+function scheduleCompilerAnalysis(delay = 50): void {
+  if (compiler === undefined) return;
+  if (compilerAnalysisTimer !== undefined) clearTimeout(compilerAnalysisTimer);
+  compilerAnalysis?.abort(new Error("superseded by a newer document version"));
+  compilerAnalysisTimer = setTimeout(() => {
+    compilerAnalysisTimer = undefined;
+    const controller = new AbortController();
+    compilerAnalysis = controller;
+    void compiler
+      ?.analyze({}, controller.signal)
+      .then((snapshot) => {
+        if (!controller.signal.aborted) acceptCompilerSnapshot(snapshot);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          connection.console.warn(`compiler analysis failed: ${String(error)}`);
+        }
+      })
+      .finally(() => {
+        if (compilerAnalysis === controller) compilerAnalysis = undefined;
+      });
+  }, delay);
+}
+
+function updateCompilerDocument(
+  method: "open" | "change",
+  document: TextDocument,
+): void {
+  const active = compiler;
+  if (active === undefined) return;
+  const update = {
+    uri: document.uri,
+    version: document.version,
+    text: document.getText(),
+  };
+  const operation = method === "open" ? active.open(update) : active.change(update);
+  void operation
+    .then(() => scheduleCompilerAnalysis())
+    .catch((error: unknown) => {
+      connection.console.warn(`compiler overlay update failed: ${String(error)}`);
+    });
+}
 
 documents.onDidOpen((event) => {
   publishDiagnostics(index.upsert(event.document.uri, event.document.version, event.document.getText()));
+  updateCompilerDocument("open", event.document);
 });
 
 documents.onDidChangeContent((event) => {
   publishDiagnostics(index.upsert(event.document.uri, event.document.version, event.document.getText()));
+  updateCompilerDocument("change", event.document);
 });
 
 documents.onDidClose((event) => {
   connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
+  void compiler
+    ?.close({ uri: event.document.uri })
+    .then(() => scheduleCompilerAnalysis())
+    .catch((error: unknown) => {
+      connection.console.warn(`compiler overlay close failed: ${String(error)}`);
+    });
   if (!event.document.uri.startsWith("file:")) {
     index.remove(event.document.uri);
     return;
@@ -237,6 +370,13 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
     }
   }
   return result.edit;
+});
+
+connection.onShutdown(async () => {
+  if (compilerAnalysisTimer !== undefined) clearTimeout(compilerAnalysisTimer);
+  compilerAnalysis?.abort(new Error("language server is shutting down"));
+  await compiler?.stop();
+  compiler = undefined;
 });
 
 documents.listen(connection);
