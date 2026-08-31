@@ -1,5 +1,4 @@
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Position, TextEdit, WorkspaceEdit } from "vscode-languageserver/node";
 import type { AblaOccurrence, AblaSymbol, Analyzer, DocumentAnalysis } from "./model.js";
 import { PositionMap } from "./positions.js";
@@ -459,10 +458,7 @@ export class WorkspaceIndex {
         const requested = match[1];
         if (requested === undefined || requested.startsWith("abla/")) continue;
         try {
-          const importer = fileURLToPath(analysis.uri);
-          const importedUri = pathToFileURL(
-            path.resolve(path.dirname(importer), requested),
-          ).href;
+          const importedUri = new URL(requested, analysis.uri).href;
           if (!graph.has(importedUri)) continue;
           graph.get(analysis.uri)?.add(importedUri);
           graph.get(importedUri)?.add(analysis.uri);
@@ -498,9 +494,14 @@ export class WorkspaceIndex {
 
   #relativeImport(fromUri: string, importedUri: string): string | undefined {
     try {
-      const from = fileURLToPath(fromUri);
-      const imported = fileURLToPath(importedUri);
-      return path.relative(path.dirname(from), imported).replaceAll(path.sep, "/");
+      const from = new URL(fromUri);
+      const imported = new URL(importedUri);
+      if (from.protocol !== "file:" || imported.protocol !== "file:" ||
+        from.host !== imported.host) return undefined;
+      return path.posix.relative(
+        path.posix.dirname(decodeURIComponent(from.pathname)),
+        decodeURIComponent(imported.pathname),
+      );
     } catch {
       return undefined;
     }
@@ -557,9 +558,7 @@ export class WorkspaceIndex {
         const requested = match[1];
         if (requested === undefined || requested.startsWith("abla/")) continue;
         try {
-          const importer = fileURLToPath(analysis.uri);
-          const imported = path.resolve(path.dirname(importer), requested);
-          edges.add(pathToFileURL(imported).href);
+          edges.add(new URL(requested, analysis.uri).href);
         } catch {
           // Non-file documents do not participate in the filesystem import graph.
         }

@@ -1,6 +1,6 @@
 {
   "name": "abla-lsp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Compiler-backed language server and refactoring engine for Abla",
   "type": "module",
   "license": "MIT",
@@ -23,7 +23,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "test": "npm run build && node --test dist/test/*.test.js && npm --prefix editors/vscode test",
+    "test": "npm run build && node --test dist/test/compiler-client.test.js dist/test/editor-features.test.js dist/test/encoding.test.js dist/test/server.test.js dist/test/source.test.js && npm --prefix editors/vscode test",
     "validate": "npm test && npm pack --dry-run && npm --prefix editors/vscode run package"
   },
   "dependencies": {

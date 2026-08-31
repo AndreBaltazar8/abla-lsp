@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
 import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
   CodeActionKind,
   createConnection,
@@ -175,10 +174,7 @@ function completionSymbols(
       const requested = match[1];
       if (requested === undefined || requested.startsWith("abla/")) continue;
       try {
-        const importer = fileURLToPath(analysis.uri);
-        const importedUri = pathToFileURL(
-          path.resolve(path.dirname(importer), requested),
-        ).href;
+        const importedUri = new URL(requested, analysis.uri).href;
         for (const symbol of index.document(importedUri)?.symbols ?? []) {
           if (symbol.topLevel) add(symbol);
         }
@@ -318,7 +314,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         },
       },
     },
-    serverInfo: { name: "abla-lsp", version: "0.1.0" },
+    serverInfo: { name: "abla-lsp", version: "0.1.1" },
   };
 });
 
@@ -354,7 +350,7 @@ async function startCompiler(): Promise<void> {
     const initialized = await candidate.start({
       workspaceRoots,
       clientName: "abla-lsp",
-      clientVersion: "0.1.0",
+      clientVersion: "0.1.1",
     });
     if (initialized.protocolVersion !== 1) {
       throw new Error(
@@ -928,11 +924,9 @@ connection.onDocumentLinks((params) => {
     }
     const relative = full.indexOf(requested);
     const start = matchOffset + relative;
-    const sourcePath = fileURLToPath(analysis.uri);
-    const targetPath = path.resolve(path.dirname(sourcePath), requested);
     links.push({
       range: positions.range({ start, end: start + requested.length }),
-      target: pathToFileURL(targetPath).href,
+      target: new URL(requested, analysis.uri).href,
       tooltip: `Open ${requested}`,
     });
   }
