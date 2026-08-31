@@ -272,6 +272,59 @@ test("multi-declaration move preserves attached comments and requested order", (
   assert.match(insertion, /\/\/ Alpha docs\nfun alpha/);
 });
 
+test("declaration move creates and populates a new target atomically", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const sourceUri = "file:///workspace/source.ab";
+  const targetUri = "file:///workspace/new-target.ab";
+  const source = "fun alpha: int = 1\nfun caller: int = alpha()\n";
+  const syntax = new SyntaxAnalyzer().analyze(sourceUri, 1, source);
+  const alpha = syntax.symbols.find((symbol) => symbol.name === "alpha");
+  index.upsertAnalysis({
+    ...syntax,
+    authority: "compiler",
+    occurrences: syntax.occurrences.map((occurrence) =>
+      occurrence.name === "alpha" && alpha !== undefined
+        ? { ...occurrence, declarationId: alpha.id }
+        : occurrence,
+    ),
+  });
+
+  const result = index.moveDeclarations({
+    symbolIds: [alpha?.id ?? ""],
+    targetUri,
+    createTarget: true,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.edit.documentChanges?.[0], { kind: "create", uri: targetUri });
+  const edits = result.edit.documentChanges?.filter(
+    (change) => "textDocument" in change,
+  ) ?? [];
+  const sourceEdit = edits.find((change) => change.textDocument.uri === sourceUri);
+  const targetEdit = edits.find((change) => change.textDocument.uri === targetUri);
+  assert.ok(sourceEdit?.edits.some(
+    (edit) => "newText" in edit && edit.newText === 'import "new-target.ab"\n',
+  ));
+  const targetText = targetEdit?.edits[0];
+  assert.match(targetText !== undefined && "newText" in targetText ? targetText.newText : "", /fun alpha: int = 1/);
+});
+
+test("declaration move does not overwrite an existing target", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const sourceUri = "file:///workspace/source.ab";
+  const targetUri = "file:///workspace/target.ab";
+  const source = new SyntaxAnalyzer().analyze(sourceUri, 1, "fun alpha: int = 1\n");
+  const target = new SyntaxAnalyzer().analyze(targetUri, 1, "fun existing: int = 0\n");
+  index.upsertAnalysis({ ...source, authority: "compiler" });
+  index.upsertAnalysis({ ...target, authority: "compiler" });
+  const result = index.moveDeclarations({
+    symbolIds: [source.symbols[0]?.id ?? ""],
+    targetUri,
+    createTarget: true,
+  });
+  assert.deepEqual(result, { ok: false, reason: "the requested target file already exists" });
+});
+
 test("declaration move rejects a newly introduced import cycle", () => {
   const index = new WorkspaceIndex(new SyntaxAnalyzer());
   const sourceUri = "file:///workspace/source.ab";

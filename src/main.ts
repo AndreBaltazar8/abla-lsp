@@ -453,9 +453,28 @@ function acceptCompilerSnapshot(snapshot: CompilerWorkspaceSnapshot): void {
 async function validateCompilerEdit(edit: WorkspaceEdit): Promise<void> {
   const active = compiler;
   const baseRevision = compilerRevision;
-  const changes = edit.changes ?? {};
-  const compilerOwned = Object.keys(changes).some(
-    (uri) => index.document(uri)?.authority === "compiler",
+  const createdUris = new Set<string>();
+  const changes = new Map<string, Array<{ readonly range: Range; readonly newText: string }>>();
+  const addChanges = (
+    uri: string,
+    edits: readonly ({ readonly range: Range } & Record<string, unknown>)[],
+  ): void => {
+    changes.set(uri, [
+      ...(changes.get(uri) ?? []),
+      ...edits.flatMap((edit) =>
+        typeof edit.newText === "string"
+          ? [{ range: edit.range, newText: edit.newText }]
+          : [],
+      ),
+    ]);
+  };
+  for (const [uri, edits] of Object.entries(edit.changes ?? {})) addChanges(uri, edits);
+  for (const change of edit.documentChanges ?? []) {
+    if ("textDocument" in change) addChanges(change.textDocument.uri, change.edits);
+    else if (change.kind === "create") createdUris.add(change.uri);
+  }
+  const compilerOwned = [...changes.keys()].some(
+    (uri) => index.document(uri)?.authority === "compiler" || createdUris.has(uri),
   );
   if (!compilerOwned) return;
   if (active === undefined || baseRevision === undefined) {
@@ -464,17 +483,18 @@ async function validateCompilerEdit(edit: WorkspaceEdit): Promise<void> {
       "compiler validation is unavailable for this semantic refactor",
     );
   }
-  const edits = Object.entries(changes).flatMap(([uri, documentEdits]) => {
+  const edits = [...changes].flatMap(([uri, documentEdits]) => {
     const analysis = index.document(uri);
-    if (analysis === undefined) return [];
-    const positions = new PositionMap(analysis.text);
+    const text = analysis?.text ?? (createdUris.has(uri) ? "" : undefined);
+    if (text === undefined) return [];
+    const positions = new PositionMap(text);
     return documentEdits.map((documentEdit) => {
       const start = positions.offset(documentEdit.range.start);
       const end = positions.offset(documentEdit.range.end);
       return {
         uri,
-        start: Buffer.byteLength(analysis.text.slice(0, start), "utf8"),
-        end: Buffer.byteLength(analysis.text.slice(0, end), "utf8"),
+        start: Buffer.byteLength(text.slice(0, start), "utf8"),
+        end: Buffer.byteLength(text.slice(0, end), "utf8"),
         newText: documentEdit.newText,
       };
     });
@@ -482,6 +502,9 @@ async function validateCompilerEdit(edit: WorkspaceEdit): Promise<void> {
   const validated = await active.validate({
     baseRevision,
     edits,
+    ...(createdUris.size === 0 ? {} : {
+      createdDocuments: [...createdUris].map((uri) => ({ uri, text: "" })),
+    }),
     invariants: ["no-new-errors", "preserve-unedited-symbols"],
   });
   if (!validated.valid) {
@@ -1089,6 +1112,7 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
             readonly position: { readonly line: number; readonly character: number };
           }[];
           readonly targetUri?: string;
+          readonly createTarget?: boolean;
           readonly apply?: boolean;
         }
       | undefined;
@@ -1100,6 +1124,7 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
     result = index.moveDeclarations({
       symbolIds: [...(argument?.symbolIds ?? []), ...selectedIds],
       targetUri: argument?.targetUri ?? "",
+      createTarget: argument?.createTarget === true,
     });
   } else if (params.command === "abla.changeSignature") {
     const argument = params.arguments?.[0] as

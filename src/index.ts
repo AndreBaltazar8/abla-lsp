@@ -22,6 +22,7 @@ export interface RenameRequest {
 export interface MoveDeclarationsRequest {
   readonly symbolIds: readonly string[];
   readonly targetUri: string;
+  readonly createTarget?: boolean;
 }
 
 const validIdentifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -249,10 +250,35 @@ export class WorkspaceIndex {
     if (request.symbolIds.length === 0) {
       return { ok: false, reason: "move requires at least one declaration" };
     }
-    const target = this.#documents.get(request.targetUri);
-    if (target === undefined || target.authority !== "compiler") {
+    const existingTarget = this.#documents.get(request.targetUri);
+    if (existingTarget === undefined && request.createTarget !== true) {
       return { ok: false, reason: "the target must be an analyzed Abla document" };
     }
+    if (existingTarget !== undefined && request.createTarget === true) {
+      return { ok: false, reason: "the requested target file already exists" };
+    }
+    if (existingTarget !== undefined && existingTarget.authority !== "compiler") {
+      return { ok: false, reason: "the target must be an analyzed Abla document" };
+    }
+    if (existingTarget === undefined) {
+      try {
+        const targetUrl = new URL(request.targetUri);
+        if (targetUrl.protocol !== "file:" || !targetUrl.pathname.endsWith(".ab")) {
+          return { ok: false, reason: "a new move target must be an Abla file URI" };
+        }
+      } catch {
+        return { ok: false, reason: "a new move target must be an Abla file URI" };
+      }
+    }
+    const target: DocumentAnalysis = existingTarget ?? {
+      authority: "compiler",
+      uri: request.targetUri,
+      version: 1,
+      text: "",
+      symbols: [],
+      occurrences: [],
+      diagnostics: [],
+    };
     const selected: ResolvedSymbol[] = [];
     const seen = new Set<string>();
     for (const id of request.symbolIds) {
@@ -360,7 +386,8 @@ export class WorkspaceIndex {
       return { ok: false, reason: "move would introduce an import cycle" };
     }
     for (const [uri, importedUris] of imports) {
-      const analysis = this.#documents.get(uri);
+      const analysis = this.#documents.get(uri) ??
+        (uri === target.uri ? target : undefined);
       if (analysis === undefined) continue;
       const requested = [...importedUris]
         .map((importedUri) => this.#relativeImport(uri, importedUri))
@@ -385,6 +412,31 @@ export class WorkspaceIndex {
         return edit;
       });
       if (!absorbed) changes[uri]?.push(importEdit);
+    }
+    if (existingTarget === undefined) {
+      let createdText = "";
+      for (const edit of changes[request.targetUri] ?? []) {
+        const positions = new PositionMap(createdText);
+        const start = positions.offset(edit.range.start);
+        const end = positions.offset(edit.range.end);
+        createdText = `${createdText.slice(0, start)}${edit.newText}${createdText.slice(end)}`;
+      }
+      changes[request.targetUri] = [{
+        range: new PositionMap("").range({ start: 0, end: 0 }),
+        newText: createdText,
+      }];
+      return {
+        ok: true,
+        edit: {
+          documentChanges: [
+            { kind: "create", uri: request.targetUri },
+            ...Object.entries(changes).map(([uri, edits]) => ({
+              textDocument: { uri, version: null },
+              edits,
+            })),
+          ],
+        },
+      };
     }
     return { ok: true, edit: { changes } };
   }

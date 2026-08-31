@@ -49,9 +49,15 @@ export interface CompilerTextEdit {
   readonly newText: string;
 }
 
+export interface CompilerCreatedDocument {
+  readonly uri: string;
+  readonly text: string;
+}
+
 export interface CompilerValidateEditParams {
   readonly baseRevision: string;
   readonly edits: readonly CompilerTextEdit[];
+  readonly createdDocuments?: readonly CompilerCreatedDocument[];
   readonly invariants: readonly string[];
 }
 

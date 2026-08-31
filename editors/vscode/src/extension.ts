@@ -27,13 +27,49 @@ async function moveDeclarations(): Promise<void> {
   if (active === undefined || selections.length === 0) return;
   const files = await vscode.workspace.findFiles("**/*.ab", "**/{.git,build,dist,node_modules}/**");
   const target = await vscode.window.showQuickPick(
-    files.map((uri) => ({ label: vscode.workspace.asRelativePath(uri), uri })),
+    [
+      { label: "$(new-file) Create a new Abla file…", create: true as const },
+      ...files.map((uri) => ({
+        label: vscode.workspace.asRelativePath(uri),
+        create: false as const,
+        uri,
+      })),
+    ],
     { placeHolder: "Move the selected declarations to…" },
   );
   if (target === undefined) return;
+  let targetUri: vscode.Uri;
+  if (target.create) {
+    const relativePath = await vscode.window.showInputBox({
+      title: "Create Abla Move Target",
+      prompt: "Path relative to the workspace root",
+      placeHolder: "src/new-module.ab",
+      validateInput: (value) => {
+        if (!value.endsWith(".ab")) return "The target must end in .ab";
+        if (value.startsWith("/") || value.split(/[\\/]/u).includes("..")) {
+          return "Enter a path inside the workspace";
+        }
+        return undefined;
+      },
+    });
+    if (relativePath === undefined) return;
+    const root = vscode.workspace.getWorkspaceFolder(
+      vscode.window.activeTextEditor?.document.uri ?? vscode.Uri.file("/"),
+    ) ?? vscode.workspace.workspaceFolders?.[0];
+    if (root === undefined) {
+      void vscode.window.showErrorMessage("Open an Abla workspace before creating a move target.");
+      return;
+    }
+    targetUri = vscode.Uri.joinPath(root.uri, ...relativePath.split(/[\\/]/u));
+  } else targetUri = target.uri;
   await active.sendRequest(ExecuteCommandRequest.type, {
     command: "abla.moveDeclarations",
-    arguments: [{ selections, targetUri: target.uri.toString(), apply: true }],
+    arguments: [{
+      selections,
+      targetUri: targetUri.toString(),
+      createTarget: target.create,
+      apply: true,
+    }],
   });
 }
 
