@@ -261,7 +261,7 @@ test("multi-declaration move preserves attached comments and requested order", (
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.edit.changes?.[sourceUri]?.length, 3);
+  assert.equal(result.edit.changes?.[sourceUri]?.length, 2);
   assert.ok(
     result.edit.changes?.[sourceUri]?.some(
       (edit) => edit.newText === 'import "target.ab"\n',
@@ -305,4 +305,39 @@ test("declaration move rejects a newly introduced import cycle", () => {
     targetUri,
   });
   assert.deepEqual(result, { ok: false, reason: "move would introduce an import cycle" });
+});
+
+test("declaration move merges imports after a preserved file header", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const sourceUri = "file:///workspace/source.ab";
+  const targetUri = "file:///workspace/target.ab";
+  const source = "fun helper: int = 1\nfun alpha: int = helper()\n";
+  const sourceAnalysis = new SyntaxAnalyzer().analyze(sourceUri, 1, source);
+  const helper = sourceAnalysis.symbols.find((symbol) => symbol.name === "helper");
+  const alpha = sourceAnalysis.symbols.find((symbol) => symbol.name === "alpha");
+  index.upsertAnalysis({
+    ...sourceAnalysis,
+    authority: "compiler",
+    occurrences: sourceAnalysis.occurrences.map((occurrence) =>
+      occurrence.name === "helper" && helper !== undefined
+        ? { ...occurrence, declarationId: helper.id }
+        : occurrence,
+    ),
+  });
+  const target = "// Copyright Abla\n\nimport \"z.ab\"\n\nfun existing: int = 0\n";
+  index.upsertAnalysis({
+    ...new SyntaxAnalyzer().analyze(targetUri, 1, target),
+    authority: "compiler",
+  });
+  const result = index.moveDeclarations({
+    symbolIds: [alpha?.id ?? ""],
+    targetUri,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const importEdit = result.edit.changes?.[targetUri]?.find(
+    (edit) => edit.newText.includes('import "source.ab"'),
+  );
+  assert.equal(importEdit?.range.start.line, 2);
+  assert.equal(importEdit?.newText, 'import "source.ab"\nimport "z.ab"\n');
 });

@@ -369,11 +369,23 @@ export class WorkspaceIndex {
         .filter((value) => !analysis.text.includes(`import "${value}"`))
         .sort((left, right) => left.localeCompare(right));
       if (requested.length === 0) continue;
-      const importEdit: TextEdit = {
-        range: new PositionMap(analysis.text).range({ start: 0, end: 0 }),
-        newText: `${requested.map((value) => `import "${value}"`).join("\n")}\n`,
-      };
-      changes[uri] = [...(changes[uri] ?? []), importEdit];
+      const importEdit = this.#mergeImportEdit(analysis, requested);
+      const existingEdits = changes[uri] ?? [];
+      const positions = new PositionMap(analysis.text);
+      const importStart = positions.offset(importEdit.range.start);
+      const importEnd = positions.offset(importEdit.range.end);
+      let absorbed = false;
+      changes[uri] = existingEdits.map((edit) => {
+        const editStart = positions.offset(edit.range.start);
+        const editEnd = positions.offset(edit.range.end);
+        if (!absorbed && edit.newText === "" &&
+          editStart <= importStart && importEnd <= editEnd) {
+          absorbed = true;
+          return { ...edit, newText: importEdit.newText };
+        }
+        return edit;
+      });
+      if (!absorbed) changes[uri]?.push(importEdit);
     }
     return { ok: true, edit: { changes } };
   }
@@ -492,6 +504,48 @@ export class WorkspaceIndex {
     } catch {
       return undefined;
     }
+  }
+
+  #mergeImportEdit(analysis: DocumentAnalysis, requested: readonly string[]): TextEdit {
+    const lines = analysis.text.match(/[^\n]*(?:\n|$)/gu) ?? [];
+    let offset = 0;
+    let headerEnd = 0;
+    let blockComment = false;
+    let line = 0;
+    while (line < lines.length) {
+      const raw = lines[line] ?? "";
+      const trimmed = raw.trim();
+      const header = trimmed === "" || trimmed.startsWith("//") ||
+        blockComment || trimmed.startsWith("/*");
+      if (!header) break;
+      if (trimmed.startsWith("/*") && !trimmed.includes("*/")) blockComment = true;
+      if (blockComment && trimmed.includes("*/")) blockComment = false;
+      offset += raw.length;
+      headerEnd = offset;
+      line += 1;
+    }
+    const importStart = headerEnd;
+    const existing: string[] = [];
+    while (line < lines.length) {
+      const raw = lines[line] ?? "";
+      const trimmed = raw.trim();
+      if (!trimmed.startsWith("import ")) break;
+      existing.push(trimmed);
+      offset += raw.length;
+      line += 1;
+    }
+    const importEnd = offset;
+    const combined = [...new Set([
+      ...existing,
+      ...requested.map((value) => `import "${value}"`),
+    ])].sort((left, right) => left.localeCompare(right));
+    return {
+      range: new PositionMap(analysis.text).range({
+        start: importStart,
+        end: importEnd,
+      }),
+      newText: `${combined.join("\n")}\n`,
+    };
   }
 
   #importGraphHasCycle(additions: ReadonlyMap<string, ReadonlySet<string>>): boolean {
