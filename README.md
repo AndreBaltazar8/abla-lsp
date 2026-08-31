@@ -18,15 +18,17 @@ The transactional refactoring layer includes:
 
 - normal and multi-cursor bulk rename use canonical compiler identities and
   validate the complete prospective overlay before returning an edit;
-- one or many top-level declarations can move to another file in one edit,
+- one or many top-level declarations can move to an existing or newly created file in one edit,
   preserving attached comments, repairing imports in both directions, and
   rejecting collisions, cycles, or new compiler diagnostics;
 - change signature, extract function/method, inline, function-to-method and
-  method-to-function conversions, local promotion, and interface extraction;
+  method-to-function conversions, local/constant introduction, binding-kind
+  conversion, local promotion, and interface extraction;
 - declaration generation, compiler-checked ownership repairs, compile-time
   migration, proven dead-code removal, type/module split and merge aliases;
-- JSON refactor recipes combine independent operations into one previewable,
-  compiler-validated transaction.
+- JSON refactor recipes combine independent operations, while staged recipes
+  validate dependent operations against fresh prospective compiler identities;
+  both return one previewable, compiler-validated transaction.
 
 See [docs/refactors.md](docs/refactors.md) for request schemas and precise
 safety boundaries.
@@ -53,8 +55,9 @@ The VS Code extension adds:
 - **Abla: Rename Symbols at All Cursors**
 - **Abla: Move Selected Declarations to File**
 - signature change, extraction, inline, function/method conversion, promotion,
-  interface/declaration generation, ownership repair, compile-time migration,
-  dead-code removal, type split/merge, and recipe commands.
+  introduce local/constant, binding conversion, interface/declaration
+  generation, ownership repair, compile-time migration, dead-code removal,
+  type split/merge, and same-snapshot/staged recipe commands.
 
 Any LSP client can call `workspace/executeCommand` directly:
 
@@ -79,7 +82,8 @@ Any LSP client can call `workspace/executeCommand` directly:
       "uri": "file:///project/src/main.ab",
       "position": { "line": 4, "character": 8 }
     }],
-    "targetUri": "file:///project/src/helpers.ab"
+    "targetUri": "file:///project/src/helpers.ab",
+    "createTarget": true
   }]
 }
 ```
