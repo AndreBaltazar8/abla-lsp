@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { CompilerClient, CompilerProtocolError } from "../src/compiler-client.js";
 import { CompilerWorkspace, SupersededAnalysis } from "../src/compiler-workspace.js";
 import type { CompilerAnalyzeParams, CompilerDocumentParams, CompilerPositionParams, CompilerWorkspaceSnapshot } from "../src/compiler-protocol.js";
 import { WorkspaceIndex } from "../src/index.js";
 import { AdvancedRefactors } from "../src/refactors.js";
 import { SyntaxAnalyzer } from "../src/source.js";
-const uri = "file:///workspace/main.ab";
+const uri = pathToFileURL(path.resolve("/workspace/main.ab")).href;
 const capabilities = ["module-graph-analysis-v1", "no-eval-ct", "analysis-queries-v1", "analysis-fields-v1"];
 function deferred() {
   let resolve = (): void => undefined;
