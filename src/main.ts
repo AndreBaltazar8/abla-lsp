@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CodeActionKind,
@@ -10,6 +11,7 @@ import {
   DocumentHighlightKind,
   DocumentSymbol,
   ErrorCodes,
+  LSPErrorCodes,
   InitializeParams,
   InitializeResult,
   InlayHintKind,
@@ -34,11 +36,14 @@ import {
   type ReferenceParams,
   type RenameParams,
   type TextDocumentPositionParams,
+  type CancellationToken,
   type WorkspaceEdit,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { CompilerClient } from "./compiler-client.js";
-import type { CompilerWorkspaceSnapshot } from "./compiler-protocol.js";
+import { CompilerClient, CompilerProtocolError } from "./compiler-client.js";
+import { CompilerWorkspace, SupersededAnalysis, ownedSource, compilerLocalUri } from "./compiler-workspace.js";
+import { compilerUriKey } from "./encoding.js";
+import type { CompilerWorkspaceSnapshot, CompilerPendingDiagnostic, CompilerQueryMethod, CompilerHover, CompilerLocation } from "./compiler-protocol.js";
 import {
   ablaKeywords,
   callArgumentOffsets,
@@ -88,8 +93,8 @@ let compilerConfiguration: {
 let compiler: CompilerClient | undefined;
 let compilerRevision: string | undefined;
 let compilerSnapshot: CompilerWorkspaceSnapshot | undefined;
-let compilerAnalysis: AbortController | undefined;
-let compilerAnalysisTimer: ReturnType<typeof setTimeout> | undefined;
+let compilerWorkspace: CompilerWorkspace | undefined;
+let compilerUris = new Set<string>();
 let compilerRestartTimer: ReturnType<typeof setTimeout> | undefined;
 let compilerRestartAttempt = 0;
 let shuttingDown = false;
@@ -263,18 +268,21 @@ function callHierarchyItem(symbol: AblaSymbol): CallHierarchyItem | undefined {
   };
 }
 
-function publishDiagnostics(analysis: DocumentAnalysis): void {
+function publishDiagnostics(analysis: DocumentAnalysis, pending: readonly CompilerPendingDiagnostic[] = []): void {
   const positions = new PositionMap(analysis.text);
   connection.sendDiagnostics({
     uri: analysis.uri,
     version: analysis.version,
-    diagnostics: analysis.diagnostics.map((diagnostic) => ({
+    diagnostics: [...analysis.diagnostics.map((diagnostic) => ({
       severity: DiagnosticSeverity.Error,
       source: analysis.authority === "compiler" ? "ablac" : "abla-syntax",
       code: diagnostic.code,
       message: diagnostic.message,
       range: positions.range(diagnostic.range),
-    })),
+    })), ...pending.map((site) => ({
+      severity: DiagnosticSeverity.Information, source: "ablac", code: site.code,
+      message: site.message, range: positions.range(site.range),
+    }))],
   });
 }
 
@@ -378,58 +386,50 @@ connection.onInitialized(() => {
 });
 
 async function startCompiler(): Promise<void> {
-  let candidate: CompilerClient;
-  candidate = new CompilerClient({
-    executable: compilerConfiguration.path,
-    ...(compilerConfiguration.arguments === undefined
-      ? {}
-      : { arguments: compilerConfiguration.arguments }),
-    log: (message) => connection.console.info(`ablac analyze: ${message}`),
-    onExit: (error) => {
-      if (compiler === candidate) {
-        compiler = undefined;
-        compilerRevision = undefined;
-        compilerSnapshot = undefined;
-      }
-      void indexWorkspace(connection, index, workspaceRoots);
-      for (const document of documents.all()) {
-        publishDiagnostics(index.upsert(
-          document.uri,
-          document.version,
-          document.getText(),
-        ));
-      }
-      scheduleCompilerRestart(error);
-    },
-  });
-  try {
-    const initialized = await candidate.start({
-      workspaceRoots,
-      clientName: "abla-lsp",
-      clientVersion: "0.3.0",
+  const createClient = (): CompilerClient => {
+    const child = new CompilerClient({
+      executable: compilerConfiguration.path,
+      ...(compilerConfiguration.arguments === undefined ? {} : { arguments: compilerConfiguration.arguments }),
+      log: (message) => connection.console.info(`ablac analyze: ${message}`),
+      onExit: (error) => {
+        if (compiler !== child) return;
+        compilerWorkspace?.dispose(); compilerWorkspace = undefined;
+        compiler = undefined; compilerRevision = undefined; compilerSnapshot = undefined;
+        clearCompilerFacts(new Set());
+        void indexWorkspace(connection, index, workspaceRoots);
+        for (const document of documents.all()) publishDiagnostics(index.upsert(document.uri, document.version, document.getText()));
+        scheduleCompilerRestart(error);
+      },
     });
-    if (initialized.protocolVersion !== 1) {
-      throw new Error(
-        `compiler analysis protocol ${initialized.protocolVersion} is unsupported`,
-      );
+    return child;
+  };
+  let candidate = createClient();
+  try {
+    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.3.0" };
+    let initialized;
+    try { initialized = await candidate.start({ ...initialize, analysisMode: "graph-v1" }); }
+    catch (error) {
+      if (!(error instanceof CompilerProtocolError) || error.code !== "unsupported_analysis_mode") throw error;
+      connection.console.info("compiler rejects graph-v1; reconnecting with legacy schema 1");
+      await candidate.stop().catch(() => undefined); candidate = createClient();
+      initialized = await candidate.start(initialize);
     }
-    compiler = candidate;
-    compilerRestartAttempt = 0;
-    connection.console.info(
-      `connected to ablac ${initialized.compilerVersion} analysis protocol 1`,
-    );
-    for (const document of documents.all()) {
-      await candidate.open({
-        uri: document.uri,
-        version: document.version,
-        text: document.getText(),
-      });
-    }
-    scheduleCompilerAnalysis(0);
+    if (initialized.protocolVersion !== 1) throw new Error(`compiler analysis protocol ${initialized.protocolVersion} is unsupported`);
+    const workspace = new CompilerWorkspace(candidate, {
+      roots: workspaceRoots, capabilities: initialized.capabilities,
+      accept: acceptCompilerSnapshot,
+      log: (message) => connection.console.warn(`compiler analysis failed: ${message}`),
+    });
+    compiler = candidate; compilerWorkspace = workspace; compilerRestartAttempt = 0;
+    connection.console.info(`connected to ablac ${initialized.compilerVersion} analysis protocol 1 (${workspace.graph ? "graph-v1, no CT evaluation" : "legacy"})`);
+    for (const document of documents.all()) await workspace.update("open", { uri: document.uri, version: document.version, text: document.getText() });
+    workspace.schedule(0);
   } catch (error) {
-    connection.console.warn(
-      `compiler analysis unavailable; continuing in syntax mode: ${String(error)}`,
-    );
+    connection.console.warn(`compiler analysis unavailable; continuing in syntax mode: ${String(error)}`);
+    if (compiler === candidate) {
+      compilerWorkspace?.dispose(); compilerWorkspace = undefined; compiler = undefined;
+      compilerRevision = undefined; compilerSnapshot = undefined; clearCompilerFacts(new Set());
+    }
     await candidate.stop().catch(() => undefined);
     scheduleCompilerRestart(error instanceof Error ? error : new Error(String(error)));
   }
@@ -449,27 +449,120 @@ function scheduleCompilerRestart(error: Error): void {
   }, delay);
 }
 
+function clearCompilerFacts(keep: ReadonlySet<string>): void {
+  for (const uri of compilerUris) {
+    if (keep.has(uri)) continue;
+    const previous = index.document(uri);
+    if (previous?.authority !== "compiler") continue;
+    const open = documents.get(uri);
+    if (open !== undefined) index.upsert(uri, open.version, open.getText());
+    else if (ownedSource(uri, workspaceRoots)) index.upsert(uri, 0, previous.text);
+    else index.remove(uri);
+  }
+  compilerUris = new Set(keep);
+}
+
 function acceptCompilerSnapshot(snapshot: CompilerWorkspaceSnapshot): void {
-  compilerRevision = snapshot.revision;
-  compilerSnapshot = snapshot;
+  const previousRevision = compilerRevision;
+  clearCompilerFacts(new Set(snapshot.documents.map((document) => document.uri)));
+  compilerRevision = snapshot.revision; compilerSnapshot = snapshot;
   for (const document of snapshot.documents) {
+    const previous = index.document(document.uri);
+    const retained = document.occurrencesAvailable === false && previousRevision === snapshot.revision &&
+      previous?.authority === "compiler" && previous.occurrencesAvailable !== false && previous.text === document.text;
     const analysis: DocumentAnalysis = {
-      authority: "compiler",
-      uri: document.uri,
-      version: document.version,
-      text: document.text,
-      symbols: document.symbols,
-      occurrences: document.occurrences,
+      authority: "compiler", uri: document.uri, version: document.version, text: document.text,
+      symbols: document.symbols, occurrences: retained ? previous.occurrences : document.occurrences,
       diagnostics: document.diagnostics,
+      ...(document.occurrencesAvailable === false && !retained ? { occurrencesAvailable: false } : {}),
+      ...(snapshot.complete === undefined ? {} : { analysisComplete: snapshot.complete }),
+      ...(snapshot.analysisMode === "graph-v1" ? { writable: ownedSource(document.uri, workspaceRoots) } : {}),
     };
     index.upsertAnalysis(analysis);
-    if (documents.get(document.uri) !== undefined) publishDiagnostics(analysis);
+    if (documents.get(document.uri) !== undefined && document.diagnosticsAvailable !== false) {
+      publishDiagnostics(analysis, snapshot.pending?.filter((site) => compilerUriKey(site.uri) === compilerUriKey(document.uri)));
+    }
   }
+  if (snapshot.complete === false) connection.console.info(`compiler graph is pre-CT/incomplete (${snapshot.pending?.length ?? 0} pending site(s))`);
+  for (const issue of snapshot.issues ?? []) connection.console.warn(`${issue.code}: ${issue.message}`);
+}
+
+async function ensureCompilerFacts(uri?: string, editing = false, occurrences = true): Promise<boolean> {
+  const workspace = compilerWorkspace;
+  if (workspace === undefined || (workspace.graph && uri !== undefined && !compilerLocalUri(uri))) return true;
+  const generation = workspace.generation;
+  const summary = await workspace.ensure(uri, occurrences && !editing);
+  if (uri !== undefined && workspace.graph && !summary.documents.some((document) => compilerUriKey(document.uri) === compilerUriKey(uri))) {
+    if (editing) throw new ResponseError(ErrorCodes.InvalidRequest, "source is outside the selected program graph");
+    return false;
+  }
+  if (editing && workspace.graph && summary.complete !== true) throw new ResponseError(ErrorCodes.InvalidRequest, "compiler graph is incomplete; compile-time evaluation was not performed");
+  if (occurrences && summary.documents.some((document) => document.occurrencesAvailable === false)) await workspace.ensure(uri, true);
+  if (workspace !== compilerWorkspace || generation !== workspace.generation) throw new ResponseError(LSPErrorCodes.ContentModified, "document changed during compiler analysis");
+  return true;
+}
+
+async function compilerPosition(method: CompilerQueryMethod, params: TextDocumentPositionParams, token?: CancellationToken) {
+  const workspace = compilerWorkspace;
+  if (workspace?.queries !== true || !compilerLocalUri(params.textDocument.uri)) return undefined;
+  const source = documents.get(params.textDocument.uri)?.getText() ?? index.document(params.textDocument.uri)?.text;
+  if (source === undefined) return undefined;
+  const controller = new AbortController();
+  const cancelled = token?.onCancellationRequested(() => controller.abort(new SupersededAnalysis()));
+  if (token?.isCancellationRequested === true) controller.abort(new SupersededAnalysis());
+  try {
+    const result = await workspace.position(method, params.textDocument.uri, new PositionMap(source).offset(params.position), controller.signal);
+    const current = result.snapshot.documents.find((document) => compilerUriKey(document.uri) === compilerUriKey(params.textDocument.uri));
+    if (current !== undefined && current.text !== source) throw new SupersededAnalysis();
+    return result;
+  } catch (error) {
+    if (error instanceof CompilerProtocolError && error.code === "document_not_analyzed") {
+      connection.console.info("source is outside the selected program graph");
+      return { revision: compilerRevision ?? "", complete: false, value: method === "query/references" ? [] : null, snapshot: workspace.snapshot };
+    }
+    if (controller.signal.aborted) throw new ResponseError(LSPErrorCodes.RequestCancelled, "compiler positional query was cancelled");
+    if (error instanceof SupersededAnalysis) throw new ResponseError(LSPErrorCodes.ContentModified, error.message);
+    connection.console.warn(`compiler positional query failed: ${String(error)}`);
+    throw new ResponseError(ErrorCodes.InternalError, String(error));
+  } finally { cancelled?.dispose(); }
+}
+
+function queryLocation(symbol: AblaSymbol, snapshot: CompilerWorkspaceSnapshot | undefined): Location | undefined {
+  const source = snapshot?.documents.find((document) => compilerUriKey(document.uri) === compilerUriKey(symbol.uri));
+  return source === undefined ? undefined : Location.create(source.uri, new PositionMap(source.text).range(symbol.selectionRange));
+}
+
+async function assertOwnedEdit(uri: string, created: boolean): Promise<void> {
+  const localOpen = workspaceRoots.length === 0 && documents.get(uri) !== undefined;
+  if (!ownedSource(uri, workspaceRoots) && !localOpen) throw new ResponseError(ErrorCodes.InvalidRequest, "semantic edits cannot modify stdlib, dependency copies or sources outside the workspace");
+  const file = fileURLToPath(uri);
+  let actual: string;
+  if (created) {
+    let existing = path.dirname(file);
+    const tail: string[] = [path.basename(file)];
+    while (true) {
+      try { actual = path.resolve(await fs.realpath(existing), ...tail); break; }
+      catch {
+        const parent = path.dirname(existing);
+        if (parent === existing) throw new ResponseError(ErrorCodes.InvalidRequest, "new edit target has no owned parent");
+        tail.unshift(path.basename(existing)); existing = parent;
+      }
+    }
+  } else actual = await fs.realpath(file);
+  if (localOpen) return;
+  for (const root of workspaceRoots) {
+    const relative = path.relative(await fs.realpath(root), actual);
+    if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) return;
+  }
+  throw new ResponseError(ErrorCodes.InvalidRequest, "semantic edit follows a symlink outside the workspace");
 }
 
 async function validateCompilerEdit(edit: WorkspaceEdit): Promise<void> {
   const active = compiler;
+  const workspace = compilerWorkspace;
+  const generation = workspace?.generation;
   const baseRevision = compilerRevision;
+  const snapshot = compilerSnapshot;
   const createdUris = new Set<string>();
   const changes = new Map<string, Array<{ readonly range: Range; readonly newText: string }>>();
   const addChanges = (
@@ -490,7 +583,16 @@ async function validateCompilerEdit(edit: WorkspaceEdit): Promise<void> {
     if ("textDocument" in change) addChanges(change.textDocument.uri, change.edits);
     else if (change.kind === "create") createdUris.add(change.uri);
   }
-  const compilerOwned = [...changes.keys()].some(
+  if (workspace?.graph === true) {
+    if (snapshot?.complete !== true) throw new ResponseError(ErrorCodes.InvalidRequest, "compiler graph is incomplete; semantic edits require complete validation");
+    for (const uri of new Set([...changes.keys(), ...createdUris])) {
+      if (!createdUris.has(uri) && !snapshot.documents.some((document) => compilerUriKey(document.uri) === compilerUriKey(uri))) {
+        throw new ResponseError(ErrorCodes.InvalidRequest, "semantic edit targets a source outside the selected program graph");
+      }
+      await assertOwnedEdit(uri, createdUris.has(uri));
+    }
+  }
+  const compilerOwned = workspace?.graph === true || [...changes.keys()].some(
     (uri) => index.document(uri)?.authority === "compiler" || createdUris.has(uri),
   );
   if (!compilerOwned) return;
@@ -524,6 +626,7 @@ async function validateCompilerEdit(edit: WorkspaceEdit): Promise<void> {
     }),
     invariants: ["no-new-errors", "preserve-unedited-symbols"],
   });
+  if (workspace !== compilerWorkspace || generation !== workspace?.generation) throw new ResponseError(LSPErrorCodes.ContentModified, "document changed while validating the edit");
   if (!validated.valid) {
     throw new ResponseError(
       ErrorCodes.InvalidRequest,
@@ -532,47 +635,10 @@ async function validateCompilerEdit(edit: WorkspaceEdit): Promise<void> {
   }
 }
 
-function scheduleCompilerAnalysis(delay = 50): void {
-  if (compiler === undefined) return;
-  if (compilerAnalysisTimer !== undefined) clearTimeout(compilerAnalysisTimer);
-  compilerAnalysis?.abort(new Error("superseded by a newer document version"));
-  compilerAnalysisTimer = setTimeout(() => {
-    compilerAnalysisTimer = undefined;
-    const controller = new AbortController();
-    compilerAnalysis = controller;
-    void compiler
-      ?.analyze({}, controller.signal)
-      .then((snapshot) => {
-        if (!controller.signal.aborted) acceptCompilerSnapshot(snapshot);
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) {
-          connection.console.warn(`compiler analysis failed: ${String(error)}`);
-        }
-      })
-      .finally(() => {
-        if (compilerAnalysis === controller) compilerAnalysis = undefined;
-      });
-  }, delay);
-}
-
-function updateCompilerDocument(
-  method: "open" | "change",
-  document: TextDocument,
-): void {
-  const active = compiler;
-  if (active === undefined) return;
-  const update = {
-    uri: document.uri,
-    version: document.version,
-    text: document.getText(),
-  };
-  const operation = method === "open" ? active.open(update) : active.change(update);
-  void operation
-    .then(() => scheduleCompilerAnalysis())
-    .catch((error: unknown) => {
-      connection.console.warn(`compiler overlay update failed: ${String(error)}`);
-    });
+function updateCompilerDocument(method: "open" | "change", document: TextDocument): void {
+  if (compilerWorkspace === undefined) return;
+  void compilerWorkspace.update(method, { uri: document.uri, version: document.version, text: document.getText() })
+    .catch((error: unknown) => connection.console.warn(`compiler overlay update failed: ${String(error)}`));
 }
 
 documents.onDidOpen((event) => {
@@ -587,9 +653,8 @@ documents.onDidChangeContent((event) => {
 
 documents.onDidClose((event) => {
   connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
-  void compiler
-    ?.close({ uri: event.document.uri })
-    .then(() => scheduleCompilerAnalysis())
+  void compilerWorkspace
+    ?.close(event.document.uri)
     .catch((error: unknown) => {
       connection.console.warn(`compiler overlay close failed: ${String(error)}`);
     });
@@ -599,17 +664,22 @@ documents.onDidClose((event) => {
   }
   void fs
     .readFile(fileURLToPath(event.document.uri), "utf8")
-    .then((text) => index.upsert(event.document.uri, 0, text))
+    .then((text) => {
+      if (index.document(event.document.uri)?.authority !== "compiler") index.upsert(event.document.uri, 0, text);
+    })
     .catch(() => index.remove(event.document.uri));
 });
 
-connection.onDocumentSymbol((params: DocumentSymbolParams): DocumentSymbol[] => {
+connection.onDidChangeWatchedFiles(() => { compilerWorkspace?.invalidate(); });
+
+connection.onDocumentSymbol(async (params: DocumentSymbolParams): Promise<DocumentSymbol[]> => {
+  await ensureCompilerFacts(params.textDocument.uri, false, false);
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return [];
   const positions = new PositionMap(analysis.text);
   return analysis.symbols.map((symbol) => ({
     name: symbol.name,
-    detail: `${symbol.detail} · ${analysis.authority}`,
+    detail: `${symbol.detail} · ${analysis.authority}${analysis.analysisComplete === false ? " (pre-CT; incomplete)" : ""}`,
     kind: symbolKind(symbol),
     range: positions.range(symbol.range),
     selectionRange: positions.range(symbol.selectionRange),
@@ -633,21 +703,33 @@ connection.onWorkspaceSymbol(
     }),
 );
 
-connection.onDefinition((params: TextDocumentPositionParams): Location[] => {
-  const resolved = index.resolve(params.textDocument.uri, params.position);
-  if (resolved === undefined) return [];
-  const resolvedLocation = location(resolved.symbol);
-  return resolvedLocation === undefined ? [] : [resolvedLocation];
-});
+function navigationIndex(uri: string): WorkspaceIndex {
+  if (compilerWorkspace?.graph !== true || compilerLocalUri(uri)) return index;
+  const local = new WorkspaceIndex(new SyntaxAnalyzer());
+  const source = index.document(uri);
+  if (source !== undefined) local.upsert(uri, source.version, source.text);
+  return local;
+}
 
-connection.onDeclaration((params: TextDocumentPositionParams): Location[] => {
-  const resolved = index.resolve(params.textDocument.uri, params.position);
+async function definitionLocations(params: TextDocumentPositionParams, token?: CancellationToken): Promise<Location[]> {
+  const query = await compilerPosition("query/definition", params, token);
+  if (query !== undefined) {
+    const target = query.value as AblaSymbol | null;
+    const result = target === null ? undefined : queryLocation(target, query.snapshot);
+    return result === undefined ? [] : [result];
+  }
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
+  const navigation = navigationIndex(params.textDocument.uri);
+  const resolved = navigation.resolve(params.textDocument.uri, params.position);
   if (resolved === undefined) return [];
-  const resolvedLocation = location(resolved.symbol);
-  return resolvedLocation === undefined ? [] : [resolvedLocation];
-});
+  const result = location(resolved.symbol);
+  return result === undefined ? [] : [result];
+}
+connection.onDefinition(definitionLocations);
+connection.onDeclaration(definitionLocations);
 
-connection.onTypeDefinition((params: TextDocumentPositionParams): Location[] => {
+connection.onTypeDefinition(async (params: TextDocumentPositionParams): Promise<Location[]> => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return [];
   const offset = new PositionMap(analysis.text).offset(params.position);
@@ -668,11 +750,30 @@ connection.onTypeDefinition((params: TextDocumentPositionParams): Location[] => 
   return target === undefined ? [] : [target];
 });
 
-connection.onReferences((params: ReferenceParams): Location[] => {
-  const resolved = index.resolve(params.textDocument.uri, params.position);
+connection.onReferences(async (params: ReferenceParams, token): Promise<Location[]> => {
+  const query = await compilerPosition("query/references", params, token);
+  if (query !== undefined) {
+    let declaration: AblaSymbol | null = null;
+    if (!params.context.includeDeclaration) {
+      const target = await compilerPosition("query/definition", params, token);
+      if (target !== undefined && target.revision !== query.revision) throw new ResponseError(LSPErrorCodes.ContentModified, "references changed during the query");
+      declaration = (target?.value as AblaSymbol | null | undefined) ?? null;
+    }
+    const locations: Location[] = [];
+    for (const reference of query.value as readonly CompilerLocation[]) {
+      if (declaration !== null && compilerUriKey(reference.uri) === compilerUriKey(declaration.uri) &&
+          reference.range.start === declaration.selectionRange.start && reference.range.end === declaration.selectionRange.end) continue;
+      const source = query.snapshot?.documents.find((document) => compilerUriKey(document.uri) === compilerUriKey(reference.uri));
+      if (source !== undefined) locations.push(Location.create(source.uri, new PositionMap(source.text).range(reference.range)));
+    }
+    return locations;
+  }
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
+  const navigation = navigationIndex(params.textDocument.uri);
+  const resolved = navigation.resolve(params.textDocument.uri, params.position);
   if (resolved === undefined) return [];
   const result: Location[] = [];
-  for (const [uri, occurrences] of index.references(resolved)) {
+  for (const [uri, occurrences] of navigation.references(resolved)) {
     const analysis = index.document(uri);
     if (analysis === undefined) continue;
     const positions = new PositionMap(analysis.text);
@@ -692,11 +793,12 @@ connection.onReferences((params: ReferenceParams): Location[] => {
 });
 
 connection.onDocumentHighlight((params: TextDocumentPositionParams) => {
-  const resolved = index.resolve(params.textDocument.uri, params.position);
+  const navigation = navigationIndex(params.textDocument.uri);
+  const resolved = navigation.resolve(params.textDocument.uri, params.position);
   if (resolved === undefined) return [];
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return [];
-  const occurrences = index.references(resolved).get(analysis.uri) ?? [];
+  const occurrences = navigation.references(resolved).get(analysis.uri) ?? [];
   const positions = new PositionMap(analysis.text);
   return occurrences.map((occurrence) => ({
     range: positions.range(occurrence.range),
@@ -704,8 +806,22 @@ connection.onDocumentHighlight((params: TextDocumentPositionParams) => {
   }));
 });
 
-connection.onHover((params: TextDocumentPositionParams): Hover | null => {
-  const resolved = index.resolve(params.textDocument.uri, params.position);
+connection.onHover(async (params: TextDocumentPositionParams, token): Promise<Hover | null> => {
+  const query = await compilerPosition("query/hover", params, token);
+  if (query !== undefined) {
+    const value = query.value as CompilerHover | null;
+    if (value === null || (value.type === "" && value.symbol === null)) return null;
+    const source = query.snapshot?.documents.find((document) => compilerUriKey(document.uri) === compilerUriKey(params.textDocument.uri));
+    if (source === undefined) return null;
+    const owner = value.symbol === null ? undefined : query.snapshot?.documents.find((document) => compilerUriKey(document.uri) === compilerUriKey(value.symbol?.uri ?? ""));
+    const signature = value.symbol === null ? value.type : owner === undefined ? value.symbol.detail
+      : symbolSignature({ ...owner, authority: "compiler" }, value.symbol);
+    return { contents: { kind: "markdown", value: `\`${signature}\`${value.type === "" ? "" : `\n\nType: \`${value.type}\``}\n\nAnalysis: **compiler${query.complete === false ? " (pre-CT; incomplete)" : ""}**` },
+      range: new PositionMap(source.text).range(value.range) };
+  }
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return null;
+  const navigation = navigationIndex(params.textDocument.uri);
+  const resolved = navigation.resolve(params.textDocument.uri, params.position);
   if (resolved === undefined) return null;
   const source = index.document(params.textDocument.uri);
   if (source === undefined) return null;
@@ -725,12 +841,18 @@ connection.onHover((params: TextDocumentPositionParams): Hover | null => {
   };
 });
 
-connection.onCompletion((params): CompletionItem[] => {
-  const analysis = index.document(params.textDocument.uri);
+connection.onCompletion(async (params): Promise<CompletionItem[]> => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri, false, false))) return [];
+  let analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return [];
   const offset = new PositionMap(analysis.text).offset(params.position);
   let begin = offset;
   while (begin > 0 && /[A-Za-z0-9_]/.test(analysis.text[begin - 1] ?? "")) begin -= 1;
+  if (begin > 0 && analysis.text[begin - 1] === ".") {
+    if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
+    analysis = index.document(params.textDocument.uri);
+    if (analysis === undefined) return [];
+  }
   const prefix = analysis.text.slice(begin, offset).toLocaleLowerCase();
   const items = new Map<string, CompletionItem>();
   for (const symbol of completionSymbols(analysis, offset, begin)) {
@@ -758,7 +880,8 @@ connection.onCompletion((params): CompletionItem[] => {
   return [...items.values()].slice(0, 250);
 });
 
-connection.onSignatureHelp((params) => {
+connection.onSignatureHelp(async (params) => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return null;
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return null;
   const offset = new PositionMap(analysis.text).offset(params.position);
@@ -782,7 +905,8 @@ connection.onSignatureHelp((params) => {
   };
 });
 
-connection.languages.semanticTokens.on((params) => {
+connection.languages.semanticTokens.on(async (params) => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return new SemanticTokensBuilder().build();
   const analysis = index.document(params.textDocument.uri);
   const builder = new SemanticTokensBuilder();
   if (analysis === undefined) return builder.build();
@@ -819,7 +943,8 @@ connection.onFoldingRanges((params) => {
   return analysis === undefined ? [] : foldingRanges(analysis.text);
 });
 
-connection.onSelectionRanges((params) => {
+connection.onSelectionRanges(async (params) => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return [];
   const positions = new PositionMap(analysis.text);
@@ -847,7 +972,8 @@ connection.onSelectionRanges((params) => {
   });
 });
 
-connection.languages.inlayHint.on((params) => {
+connection.languages.inlayHint.on(async (params) => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined || analysis.authority !== "compiler") return [];
   const positions = new PositionMap(analysis.text);
@@ -927,11 +1053,13 @@ function editDistance(left: string, right: string): number {
 }
 
 connection.onCodeAction(async (params) => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
+  const semanticActions = compilerWorkspace?.graph !== true || compilerSnapshot?.complete === true;
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return [];
   const actions: CodeAction[] = [];
   if (
-    analysis.authority === "compiler" &&
+    semanticActions && analysis.authority === "compiler" &&
     (params.context.only === undefined ||
       params.context.only.some((kind) => CodeActionKind.QuickFix.startsWith(kind)))
   ) {
@@ -1013,14 +1141,16 @@ connection.onDocumentLinks((params) => {
   return links;
 });
 
-connection.languages.callHierarchy.onPrepare((params) => {
+connection.languages.callHierarchy.onPrepare(async (params) => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
   const resolved = index.resolve(params.textDocument.uri, params.position);
   if (resolved === undefined || resolved.symbol.kind !== "function") return null;
   const item = callHierarchyItem(resolved.symbol);
   return item === undefined ? null : [item];
 });
 
-connection.languages.callHierarchy.onIncomingCalls((params) => {
+connection.languages.callHierarchy.onIncomingCalls(async (params) => {
+  if (!(await ensureCompilerFacts(params.item.uri))) return [];
   const id = (params.item.data as { readonly id?: string } | undefined)?.id;
   if (id === undefined) return [];
   const groups = new Map<string, CallHierarchyIncomingCall>();
@@ -1046,7 +1176,8 @@ connection.languages.callHierarchy.onIncomingCalls((params) => {
   return [...groups.values()];
 });
 
-connection.languages.callHierarchy.onOutgoingCalls((params) => {
+connection.languages.callHierarchy.onOutgoingCalls(async (params) => {
+  if (!(await ensureCompilerFacts(params.item.uri))) return [];
   const id = (params.item.data as { readonly id?: string } | undefined)?.id;
   if (id === undefined) return [];
   const source = index.symbolById(id);
@@ -1075,13 +1206,15 @@ connection.languages.callHierarchy.onOutgoingCalls((params) => {
   return [...groups.values()];
 });
 
-connection.onPrepareRename((params: TextDocumentPositionParams): Range | null => {
+connection.onPrepareRename(async (params: TextDocumentPositionParams): Promise<Range | null> => {
+  await ensureCompilerFacts(params.textDocument.uri, true);
   const resolved = index.prepareRename(params.textDocument.uri, params.position);
   if (resolved === undefined) return null;
   return new PositionMap(resolved.analysis.text).range(resolved.symbol.selectionRange);
 });
 
 connection.onRenameRequest(async (params: RenameParams): Promise<WorkspaceEdit> => {
+  await ensureCompilerFacts(params.textDocument.uri, true);
   const result = index.rename({
     uri: params.textDocument.uri,
     position: params.position,
@@ -1107,6 +1240,10 @@ function commandSymbolId(
 }
 
 connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
+  const argument = params.arguments?.[0] as { readonly uri?: string; readonly selection?: CommandSelection; readonly selections?: readonly CommandSelection[]; readonly renames?: readonly RenameRequest[]; readonly symbolId?: string; readonly classSymbolId?: string; readonly symbolIds?: readonly string[] } | undefined;
+  const selectedId = argument?.symbolId ?? argument?.classSymbolId ?? argument?.symbolIds?.[0];
+  const requestedUri = argument?.selection?.uri ?? argument?.selections?.[0]?.uri ?? argument?.renames?.[0]?.uri ?? argument?.uri ?? (selectedId === undefined ? undefined : index.symbolById(selectedId)?.symbol.uri);
+  await ensureCompilerFacts(requestedUri, true);
   let apply = false;
   let result: EditResult;
   if (params.command === "abla.renameSymbols") {
@@ -1323,9 +1460,8 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
 
 connection.onShutdown(async () => {
   shuttingDown = true;
-  if (compilerAnalysisTimer !== undefined) clearTimeout(compilerAnalysisTimer);
   if (compilerRestartTimer !== undefined) clearTimeout(compilerRestartTimer);
-  compilerAnalysis?.abort(new Error("language server is shutting down"));
+  compilerWorkspace?.dispose(); compilerWorkspace = undefined;
   await compiler?.stop();
   compiler = undefined;
   compilerRevision = undefined;

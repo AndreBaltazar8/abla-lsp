@@ -1,0 +1,259 @@
+{
+  "compiler": "/tmp/abla-lsp-a0-graph-6c69d56c",
+  "root": "/home/andre/Desktop/projects/worktrees/ablac-lsp-design/build/lsp-lab/abla-one",
+  "entry": "/home/andre/Desktop/projects/worktrees/ablac-lsp-design/build/lsp-lab/abla-one/src/one.ab",
+  "runs": [
+    {
+      "round": 1,
+      "mode": "full",
+      "results": [
+        {
+          "phase": "cold",
+          "seconds": 2.648244655,
+          "wireBytes": 9174783,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        },
+        {
+          "phase": "noop",
+          "seconds": 0.3442513920000001,
+          "wireBytes": 9174783,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        },
+        {
+          "phase": "edit",
+          "seconds": 1.5484252140000003,
+          "wireBytes": 9174816,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "mode": "projected",
+      "results": [
+        {
+          "phase": "cold",
+          "seconds": 1.738104055,
+          "wireBytes": 3779196,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        },
+        {
+          "phase": "noop",
+          "seconds": 0.21220622899999989,
+          "wireBytes": 3779196,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        },
+        {
+          "phase": "edit",
+          "seconds": 2.4783014599999995,
+          "wireBytes": 3779229,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "mode": "projected",
+      "results": [
+        {
+          "phase": "cold",
+          "seconds": 2.282560786,
+          "wireBytes": 3779196,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        },
+        {
+          "phase": "noop",
+          "seconds": 0.13193872999999984,
+          "wireBytes": 3779196,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        },
+        {
+          "phase": "edit",
+          "seconds": 1.8365903550000002,
+          "wireBytes": 3779229,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "mode": "full",
+      "results": [
+        {
+          "phase": "cold",
+          "seconds": 1.7922612230000001,
+          "wireBytes": 9174783,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        },
+        {
+          "phase": "noop",
+          "seconds": 0.26074679700000003,
+          "wireBytes": 9174783,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        },
+        {
+          "phase": "edit",
+          "seconds": 1.8981548870000002,
+          "wireBytes": 9174816,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "mode": "full",
+      "results": [
+        {
+          "phase": "cold",
+          "seconds": 1.9357049179999999,
+          "wireBytes": 9174783,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        },
+        {
+          "phase": "noop",
+          "seconds": 0.3658160819999998,
+          "wireBytes": 9174783,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        },
+        {
+          "phase": "edit",
+          "seconds": 1.536637712,
+          "wireBytes": 9174816,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 32944,
+          "unavailableOccurrences": 0
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "mode": "projected",
+      "results": [
+        {
+          "phase": "cold",
+          "seconds": 1.263883206,
+          "wireBytes": 3779196,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        },
+        {
+          "phase": "noop",
+          "seconds": 0.137987805,
+          "wireBytes": 3779196,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        },
+        {
+          "phase": "edit",
+          "seconds": 1.6782500260000002,
+          "wireBytes": 3779229,
+          "documents": 26,
+          "complete": false,
+          "pending": 3,
+          "diagnostics": 0,
+          "symbols": 6301,
+          "occurrences": 0,
+          "unavailableOccurrences": 26
+        }
+      ]
+    }
+  ]
+}

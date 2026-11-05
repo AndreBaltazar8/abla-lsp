@@ -1,4 +1,4 @@
-import type { AblaDiagnostic, AblaOccurrence, AblaSymbol } from "./model.js";
+import type { AblaDiagnostic, AblaOccurrence, AblaSymbol, OffsetRange } from "./model.js";
 
 export const compilerProtocolVersion = 1 as const;
 
@@ -9,17 +9,59 @@ export interface CompilerDocumentSnapshot {
   readonly symbols: readonly AblaSymbol[];
   readonly occurrences: readonly AblaOccurrence[];
   readonly diagnostics: readonly AblaDiagnostic[];
+  readonly occurrencesAvailable?: boolean;
+  readonly symbolsAvailable?: boolean;
+  readonly diagnosticsAvailable?: boolean;
 }
 
-export interface CompilerWorkspaceSnapshot {
+export type CompilerAnalysisField = "diagnostics" | "symbols" | "occurrences";
+export interface CompilerPendingDiagnostic {
+  readonly code: string;
+  readonly uri: string;
+  readonly range: OffsetRange;
+  readonly message: string;
+}
+export interface CompilerGraphMetadata {
+  readonly analysisMode?: "graph-v1";
+  readonly entry?: string;
+  readonly complete?: boolean;
+  readonly pending?: readonly CompilerPendingDiagnostic[];
+  readonly issues?: readonly { readonly code: string; readonly message: string }[];
+  readonly fields?: readonly CompilerAnalysisField[];
+}
+export interface CompilerWorkspaceSnapshot extends CompilerGraphMetadata {
   readonly revision: string;
   readonly documents: readonly CompilerDocumentSnapshot[];
+}
+
+/** Raw projections may omit facts. The normalized model records unavailability. */
+export interface CompilerWireDocument extends Omit<CompilerDocumentSnapshot, "symbols" | "occurrences" | "diagnostics"> {
+  readonly symbols?: readonly AblaSymbol[];
+  readonly occurrences?: readonly AblaOccurrence[];
+  readonly diagnostics?: readonly AblaDiagnostic[];
+}
+export interface CompilerWireSnapshot extends Omit<CompilerWorkspaceSnapshot, "documents"> {
+  readonly documents: readonly CompilerWireDocument[];
+}
+export type CompilerQueryMethod = "query/definition" | "query/hover" | "query/references";
+export interface CompilerPositionParams {
+  readonly uri: string;
+  readonly offset: number;
+  readonly revision: string;
+}
+export interface CompilerLocation { readonly uri: string; readonly range: OffsetRange }
+export interface CompilerHover { readonly range: OffsetRange; readonly type: string; readonly symbol: AblaSymbol | null }
+export interface CompilerQueryResult<Value> extends Pick<CompilerGraphMetadata, "complete" | "pending"> {
+  readonly revision: string;
+  readonly value: Value;
 }
 
 export interface CompilerInitializeParams {
   readonly workspaceRoots: readonly string[];
   readonly clientName: string;
   readonly clientVersion: string;
+  readonly analysisMode?: "graph-v1";
+  readonly entryPoints?: readonly string[];
 }
 
 export interface CompilerInitializeResult {
@@ -40,6 +82,7 @@ export interface CompilerCloseDocumentParams {
 
 export interface CompilerAnalyzeParams {
   readonly roots?: readonly string[];
+  readonly fields?: readonly CompilerAnalysisField[];
 }
 
 export interface CompilerTextEdit {
@@ -74,6 +117,7 @@ export type CompilerMethod =
   | "document/close"
   | "analyze"
   | "refactor/validate"
+  | CompilerQueryMethod
   | "shutdown";
 
 export interface CompilerRequest {

@@ -325,12 +325,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         transport: TransportKind.ipc,
       }
     : { command: serverPath, args: ["--stdio"] };
+  const fileEvents = ["**/*.ab", "**/abla.toml", "**/abla.lock"].map((pattern) =>
+    vscode.workspace.createFileSystemWatcher(pattern));
+  context.subscriptions.push(...fileEvents);
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "abla" }],
     initializationOptions: {
       compiler: { enabled: compilerEnabled, path: compilerPath },
     },
-    synchronize: { configurationSection: "abla" },
+    synchronize: { configurationSection: "abla", fileEvents },
   };
   client = new LanguageClient("abla", "Abla Language Server", serverOptions, clientOptions);
   context.subscriptions.push(

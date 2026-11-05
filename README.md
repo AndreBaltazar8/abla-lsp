@@ -33,6 +33,9 @@ The transactional refactoring layer includes:
 See [docs/refactors.md](docs/refactors.md) for request schemas and precise
 safety boundaries.
 
+See [graph-aware analysis](docs/compiler-graph.md) for capability negotiation,
+no-evaluation editor policy, positional queries and incomplete-refactor limits.
+
 ## Development
 
 Node.js 20 or newer and Abla 0.2.13 or newer with analysis protocol version 1

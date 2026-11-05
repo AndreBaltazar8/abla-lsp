@@ -287,6 +287,7 @@ function editResult(edits: readonly OffsetEdit[], documents: readonly DocumentAn
   for (const edit of edits) {
     const analysis = analyses.get(edit.uri);
     if (analysis === undefined) return failure(`refactor targets an unanalyzed document: ${edit.uri}`);
+    if (analysis.writable === false) return failure(`refactor targets read-only stdlib or dependency source: ${edit.uri}`);
     if (edit.range.start < 0 || edit.range.end < edit.range.start || edit.range.end > analysis.text.length) {
       return failure(`refactor produced an invalid range in ${edit.uri}`);
     }
@@ -411,6 +412,8 @@ export class AdvancedRefactors {
   }
 
   changeSignature(request: ChangeSignatureRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const target = this.#function(request.symbolId);
     if (target === undefined) return failure("change signature requires a resolved function");
     if (request.parameters.some((parameter) => !identifier.test(parameter.name))) {
@@ -484,6 +487,8 @@ export class AdvancedRefactors {
   }
 
   extractFunction(request: ExtractFunctionRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     if (!identifier.test(request.name)) return failure("the extracted function name is invalid");
     const analysis = this.#index.document(request.uri);
     const target = this.#index.document(request.targetUri ?? request.uri);
@@ -526,6 +531,8 @@ export class AdvancedRefactors {
   }
 
   functionToMethod(request: ConvertFunctionToMethodRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const target = this.#function(request.symbolId);
     if (target === undefined || target.receiverType !== undefined) return failure("function-to-method requires a top-level non-extension function");
     const receiverIndex = typeof request.receiver === "number"
@@ -564,6 +571,8 @@ export class AdvancedRefactors {
   }
 
   methodToFunction(request: ConvertMethodToFunctionRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const target = this.#function(request.symbolId);
     if (target === undefined) return failure("method-to-function requires a resolved method");
     const owner = target.symbol.containerId === undefined
@@ -643,6 +652,8 @@ export class AdvancedRefactors {
   }
 
   inlineSymbol(request: InlineSymbolRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const resolved = this.#index.symbolById(request.symbolId);
     if (resolved === undefined) return failure("inline requires a resolved symbol");
     const edits: OffsetEdit[] = [];
@@ -712,6 +723,8 @@ export class AdvancedRefactors {
   }
 
   introduceBinding(request: IntroduceBindingRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     if (!identifier.test(request.name)) return failure("the introduced binding name is invalid");
     if (request.type?.includes("\n") === true || request.type?.includes("\r") === true) {
       return failure("the introduced binding type must fit on one line");
@@ -781,6 +794,8 @@ export class AdvancedRefactors {
   }
 
   changeBindingKind(request: ChangeBindingKindRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const resolved = this.#index.symbolById(request.symbolId);
     if (resolved === undefined || !["value", "variable", "property"].includes(resolved.symbol.kind)) {
       return failure("change binding kind requires a resolved binding or property");
@@ -802,6 +817,8 @@ export class AdvancedRefactors {
   }
 
   promoteLocal(request: PromoteLocalRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const resolved = this.#index.symbolById(request.symbolId);
     if (resolved === undefined || resolved.symbol.topLevel || !["value", "variable"].includes(resolved.symbol.kind)) {
       return failure("promotion requires a compiler-resolved local binding");
@@ -830,6 +847,8 @@ export class AdvancedRefactors {
   }
 
   extractInterface(request: ExtractInterfaceRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     if (!identifier.test(request.name)) return failure("the interface name is invalid");
     const source = this.#index.symbolById(request.classSymbolId);
     const target = this.#index.document(request.targetUri ?? source?.symbol.uri ?? "");
@@ -845,6 +864,8 @@ export class AdvancedRefactors {
   }
 
   generateDeclaration(request: GenerateDeclarationRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const analysis = this.#index.document(request.uri);
     const target = this.#index.document(request.targetUri ?? request.uri);
     if (analysis === undefined || target === undefined) return failure("declaration generation requires analyzed source and target documents");
@@ -874,6 +895,8 @@ export class AdvancedRefactors {
   }
 
   repairOwnership(request: OwnershipRepairRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const analysis = this.#index.document(request.uri);
     if (analysis === undefined) return failure("ownership repair requires an analyzed document");
     const positions = new PositionMap(analysis.text);
@@ -892,6 +915,8 @@ export class AdvancedRefactors {
   }
 
   toggleCompileTime(request: ToggleCompileTimeRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const target = this.#function(request.symbolId);
     if (target === undefined) return failure("compile-time migration requires a resolved function");
     const prefix = target.analysis.text.slice(target.symbol.range.start, target.symbol.selectionRange.start);
@@ -914,8 +939,10 @@ export class AdvancedRefactors {
   }
 
   removeDeadCode(request: RemoveDeadCodeRequest): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     const selected = request.symbolIds === undefined
-      ? this.#index.symbols().filter((symbol) => symbol.topLevel && symbol.name !== "main" && (request.aggressive === true || symbol.name.startsWith("_")))
+      ? this.#index.editableSymbols().filter((symbol) => symbol.topLevel && symbol.name !== "main" && (request.aggressive === true || symbol.name.startsWith("_")))
       : request.symbolIds.flatMap((id) => {
         const value = this.#index.symbolById(id)?.symbol;
         return value === undefined ? [] : [value];
@@ -938,6 +965,8 @@ export class AdvancedRefactors {
   }
 
   operation(operation: RefactorOperation): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     switch (operation.kind) {
       case "rename": return this.#index.rename(operation.request);
       case "bulkRename": return this.#index.bulkRename(operation.requests);
@@ -959,6 +988,8 @@ export class AdvancedRefactors {
   }
 
   recipe(operations: readonly RefactorOperation[]): EditResult {
+    const incomplete = this.#index.incompleteReason();
+    if (incomplete !== undefined) return failure(incomplete);
     if (operations.length === 0) return failure("a refactor recipe requires at least one operation");
     const edits: OffsetEdit[] = [];
     for (const operation of operations) {

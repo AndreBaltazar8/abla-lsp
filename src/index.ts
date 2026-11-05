@@ -59,6 +59,20 @@ export class WorkspaceIndex {
     );
   }
 
+  incompleteReason(): string | undefined {
+    if (this.documents().some((document) => document.occurrencesAvailable === false)) return "compiler occurrences have not been loaded for this revision";
+    if (this.documents().some((document) => document.analysisComplete === false)) return "compiler graph is incomplete; compile-time evaluation was not performed";
+    return undefined;
+  }
+
+  editableSymbols(): readonly AblaSymbol[] {
+    const compiler = this.documents().some((document) => document.analysisComplete !== undefined);
+    return this.symbols().filter((symbol) => {
+      const document = this.document(symbol.uri);
+      return document !== undefined && document.writable !== false && (!compiler || document.authority === "compiler");
+    });
+  }
+
   symbols(query = ""): readonly AblaSymbol[] {
     const normalized = query.toLocaleLowerCase();
     return this.documents()
@@ -96,6 +110,7 @@ export class WorkspaceIndex {
   }
 
   references(resolved: ResolvedSymbol): ReadonlyMap<string, readonly AblaOccurrence[]> {
+    if (this.documents().some((document) => document.occurrencesAvailable === false)) throw new Error("compiler occurrences have not been loaded for this revision");
     const result = new Map<string, AblaOccurrence[]>();
     if (!this.#uniquelyResolvable(resolved.symbol)) return result;
     const canonical = resolved.analysis.authority === "compiler";
@@ -112,8 +127,9 @@ export class WorkspaceIndex {
   }
 
   prepareRename(uri: string, position: Position): ResolvedSymbol | undefined {
+    if (this.incompleteReason() !== undefined) return undefined;
     const resolved = this.resolve(uri, position);
-    if (resolved === undefined || !this.#uniquelyResolvable(resolved.symbol)) {
+    if (resolved === undefined || resolved.analysis.writable === false || !this.#uniquelyResolvable(resolved.symbol)) {
       return undefined;
     }
     const semanticComponent = this.#componentUris(resolved.symbol.uri);
@@ -134,6 +150,9 @@ export class WorkspaceIndex {
   }
 
   rename(request: RenameRequest): EditResult {
+    if (this.resolve(request.uri, request.position)?.analysis.writable === false) return { ok: false, reason: "the declaration belongs to read-only stdlib or dependency source" };
+    const incomplete = this.incompleteReason();
+    if (incomplete !== undefined) return { ok: false, reason: incomplete };
     if (!validIdentifier.test(request.newName)) {
       return { ok: false, reason: "the new name is not a valid Abla identifier" };
     }
@@ -168,6 +187,8 @@ export class WorkspaceIndex {
   }
 
   bulkRename(requests: readonly RenameRequest[]): EditResult {
+    const incomplete = this.incompleteReason();
+    if (incomplete !== undefined) return { ok: false, reason: incomplete };
     if (requests.length === 0) {
       return { ok: false, reason: "bulk rename requires at least one symbol" };
     }
@@ -247,6 +268,8 @@ export class WorkspaceIndex {
   }
 
   moveDeclarations(request: MoveDeclarationsRequest): EditResult {
+    const incomplete = this.incompleteReason();
+    if (incomplete !== undefined) return { ok: false, reason: incomplete };
     if (request.symbolIds.length === 0) {
       return { ok: false, reason: "move requires at least one declaration" };
     }

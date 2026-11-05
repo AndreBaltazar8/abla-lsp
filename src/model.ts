@@ -43,6 +43,9 @@ export interface AblaDiagnostic {
 
 export interface DocumentAnalysis {
   readonly authority: AnalysisAuthority;
+  readonly occurrencesAvailable?: boolean;
+  readonly analysisComplete?: boolean;
+  readonly writable?: boolean;
   readonly uri: string;
   readonly version: number;
   readonly text: string;

@@ -1,3 +1,4 @@
+import type { AblaSymbol } from "./model.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import {
@@ -14,8 +15,13 @@ import {
   type CompilerValidateEditParams,
   type CompilerValidateEditResult,
   type CompilerWorkspaceSnapshot,
+  type CompilerWireSnapshot,
+  type CompilerPositionParams,
+  type CompilerQueryResult,
+  type CompilerLocation,
+  type CompilerHover,
 } from "./compiler-protocol.js";
-import { normalizeCompilerSnapshot } from "./encoding.js";
+import { normalizeCompilerSnapshot, Utf8OffsetMap, compilerUriKey, normalizePending } from "./encoding.js";
 
 interface PendingRequest {
   readonly resolve: (value: unknown) => void;
@@ -49,6 +55,8 @@ export class CompilerClient {
   #process: ChildProcessWithoutNullStreams | undefined;
   #nextId = 1;
   #stopping = false;
+  #sourceRevision: string | undefined;
+  readonly #sources = new Map<string, { readonly uri: string; readonly map: Utf8OffsetMap }>();
 
   constructor(options: CompilerClientOptions) {
     this.#options = options;
@@ -57,6 +65,8 @@ export class CompilerClient {
   async start(params: CompilerInitializeParams): Promise<CompilerInitializeResult> {
     if (this.#process !== undefined) throw new Error("compiler client is already started");
     this.#stopping = false;
+    this.#sourceRevision = undefined;
+    this.#sources.clear();
     const child = spawn(
       this.#options.executable,
       [...(this.#options.arguments ?? ["analyze", "--stdio"])],
@@ -101,12 +111,65 @@ export class CompilerClient {
     params: CompilerAnalyzeParams = {},
     signal?: AbortSignal,
   ): Promise<CompilerWorkspaceSnapshot> {
-    const snapshot = await this.request<CompilerWorkspaceSnapshot>(
+    const snapshot = await this.request<CompilerWireSnapshot>(
       "analyze",
       params,
       signal,
     );
-    return normalizeCompilerSnapshot(snapshot);
+    this.#sourceRevision = snapshot.revision;
+    this.#sources.clear();
+    for (const document of snapshot.documents) {
+      this.#sources.set(compilerUriKey(document.uri), { uri: document.uri, map: new Utf8OffsetMap(document.text) });
+    }
+    return normalizeCompilerSnapshot(snapshot, new Map([...this.#sources].map(([uri, source]) => [uri, source.map])));
+  }
+
+  async definition(params: CompilerPositionParams, signal?: AbortSignal): Promise<CompilerQueryResult<AblaSymbol | null>> {
+    const result = await this.request<CompilerQueryResult<AblaSymbol | null>>("query/definition", params, signal);
+    this.#checkQueryRevision(params, result.revision);
+    return this.#queryResult(params, result, result.value === null ? null : this.#symbol(result.value));
+  }
+
+  async hover(params: CompilerPositionParams, signal?: AbortSignal): Promise<CompilerQueryResult<CompilerHover | null>> {
+    const result = await this.request<CompilerQueryResult<CompilerHover | null>>("query/hover", params, signal);
+    this.#checkQueryRevision(params, result.revision);
+    const value = result.value === null ? null : {
+      ...result.value, range: this.#source(params.uri).map.range(result.value.range),
+      symbol: result.value.symbol === null ? null : this.#symbol(result.value.symbol),
+    };
+    return this.#queryResult(params, result, value);
+  }
+
+  async references(params: CompilerPositionParams, signal?: AbortSignal): Promise<CompilerQueryResult<readonly CompilerLocation[]>> {
+    const result = await this.request<CompilerQueryResult<readonly CompilerLocation[]>>("query/references", params, signal);
+    this.#checkQueryRevision(params, result.revision);
+    return this.#queryResult(params, result, result.value.map((location) => {
+      const source = this.#source(location.uri);
+      return { uri: source.uri, range: source.map.range(location.range) };
+    }));
+  }
+
+  #source(uri: string): { readonly uri: string; readonly map: Utf8OffsetMap } {
+    const source = this.#sources.get(compilerUriKey(uri));
+    if (source === undefined) throw new CompilerProtocolError("source_not_analyzed", `query source is unavailable: ${uri}`);
+    return source;
+  }
+
+  #symbol(symbol: AblaSymbol): AblaSymbol {
+    const source = this.#source(symbol.uri);
+    return { ...symbol, uri: source.uri, range: source.map.range(symbol.range), selectionRange: source.map.range(symbol.selectionRange) };
+  }
+
+  #checkQueryRevision(params: CompilerPositionParams, revision: string): void {
+    if (revision !== params.revision || revision !== this.#sourceRevision) {
+      throw new CompilerProtocolError("stale_revision", "query source revision is stale");
+    }
+  }
+
+  #queryResult<Value>(params: CompilerPositionParams, result: CompilerQueryResult<unknown>, value: Value): CompilerQueryResult<Value> {
+    this.#checkQueryRevision(params, result.revision);
+    const maps = new Map([...this.#sources].map(([uri, source]) => [uri, source.map]));
+    return { ...result, value, ...(result.pending === undefined ? {} : { pending: normalizePending(result.pending, maps) }) };
   }
 
   async validate(

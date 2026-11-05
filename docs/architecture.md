@@ -25,6 +25,11 @@ the LSP does not infer them as semantic fact.
 The compiler protocol is not LSP-shaped. That keeps editor policy out of the
 compiler and lets other tools consume the same semantic snapshots.
 
+Graph-capable compilers use the [graph-v1 integration](compiler-graph.md):
+projected background snapshots, revision-bound positional queries, one serial
+active project, and explicit pre-CT completeness. Legacy protocol 1 remains
+available through capability negotiation.
+
 ## Refactoring safety
 
 Edits are constructed from canonical compiler symbol ids, never from textual

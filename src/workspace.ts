@@ -45,7 +45,9 @@ export async function indexWorkspace(
     for (const file of await sourceFiles(root)) {
       try {
         const text = await fs.readFile(file, "utf8");
-        index.upsert(pathToFileURL(file).toString(), 0, text);
+        const uri = pathToFileURL(file).toString();
+        const existing = index.document(uri);
+        if (existing?.authority !== "compiler" && (existing?.version ?? 0) === 0) index.upsert(uri, 0, text);
         files += 1;
       } catch {
         // A concurrently removed file is simply absent from this snapshot.

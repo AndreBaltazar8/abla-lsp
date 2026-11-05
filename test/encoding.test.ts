@@ -40,3 +40,24 @@ test("normalizes every compiler source range", () => {
   assert.deepEqual(document?.occurrences[0]?.range, { start: 12, end: 17 });
   assert.deepEqual(document?.diagnostics[0]?.range, { start: 8, end: 9 });
 });
+
+test("reverse offsets preserve scalar boundaries including surrogate interiors", () => {
+  const offsets = new Utf8OffsetMap("é😀x");
+  assert.deepEqual([0,1,2,3,4].map((value) => offsets.byteOffset(value)), [0,2,2,6,7]);
+  for (const byte of [0,2,6,7]) assert.equal(offsets.byteOffset(offsets.offset(byte)), byte);
+});
+
+test("projections retain graph metadata and explicitly mark missing occurrences", () => {
+  const result = normalizeCompilerSnapshot({
+    revision: "r", analysisMode: "graph-v1", complete: false, entry: "/unicode.ab",
+    fields: ["diagnostics", "symbols"],
+    pending: [{ code: "E_ANALYSIS_CT_REQUIRED", uri: "file:///unicode.ab", range: { start: 2, end: 6 }, message: "pending" }],
+    documents: [{ uri: "file:///unicode.ab", version: 1, text: "é😀x", symbols: [], diagnostics: [] }],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.analysisMode, "graph-v1");
+  assert.deepEqual(result.fields, ["diagnostics", "symbols"]);
+  assert.deepEqual(result.pending?.[0]?.range, { start: 1, end: 3 });
+  assert.equal(result.documents[0]?.occurrencesAvailable, false);
+  assert.deepEqual(result.documents[0]?.occurrences, []);
+});
