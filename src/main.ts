@@ -374,7 +374,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         },
       },
     },
-    serverInfo: { name: "abla-lsp", version: "0.3.0" },
+    serverInfo: { name: "abla-lsp", version: "0.4.0" },
   };
 });
 
@@ -405,7 +405,7 @@ async function startCompiler(): Promise<void> {
   };
   let candidate = createClient();
   try {
-    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.3.0" };
+    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0" };
     let initialized;
     try { initialized = await candidate.start({ ...initialize, analysisMode: "graph-v1" }); }
     catch (error) {

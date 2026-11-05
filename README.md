@@ -38,7 +38,7 @@ no-evaluation editor policy, positional queries and incomplete-refactor limits.
 
 ## Development
 
-Node.js 20 or newer and Abla 0.2.13 or newer with analysis protocol version 1
+Node.js 20 or newer and Abla 0.2.46 or newer with analysis protocol version 1
 are required for the complete semantic and new-file refactor feature set.
 
 ```sh

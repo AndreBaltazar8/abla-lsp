@@ -1,6 +1,6 @@
 # Abla Language Server for VS Code
 
-This extension bundles `abla-lsp`; install Abla 0.2.13 or newer, or configure
+This extension bundles `abla-lsp`; install Abla 0.2.46 or newer, or configure
 its compiler executable path in the Abla settings. An external language-server executable can also be
 selected for development. Syntax highlighting is supplied by the
 `andrebaltazar8.abla-tmlanguage` extension.
