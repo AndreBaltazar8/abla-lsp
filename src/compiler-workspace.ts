@@ -57,6 +57,8 @@ export class CompilerWorkspace {
   readonly graph: boolean;
   readonly queries: boolean;
   readonly projected: boolean;
+  /** graph-v2: ids are names, not offsets, and analyses are incremental (analysis-since-v1). */
+  readonly stableIds: boolean;
   readonly #client: Transport;
   readonly #roots: readonly string[];
   readonly #accept: (snapshot: CompilerWorkspaceSnapshot) => void;
@@ -85,6 +87,7 @@ export class CompilerWorkspace {
     if (this.graph && !options.capabilities.includes("no-eval-ct")) throw new Error("graph compiler lacks the no-evaluation capability");
     this.queries = this.graph && options.capabilities.includes("analysis-queries-v1");
     this.projected = this.graph && options.capabilities.includes("analysis-fields-v1");
+    this.stableIds = this.graph && options.capabilities.includes("stable-declaration-ids-v1");
   }
 
   get snapshot(): CompilerWorkspaceSnapshot | undefined { return this.#snapshot; }
@@ -138,7 +141,7 @@ export class CompilerWorkspace {
       ...(this.graph && scope !== undefined ? { roots: [scope] } : {}),
       ...(this.projected && !needOccurrences ? { fields: ["diagnostics", "symbols"] } : {}),
     });
-    if (this.graph && (result.analysisMode !== "graph-v1" || typeof result.complete !== "boolean")) {
+    if (this.graph && ((result.analysisMode !== "graph-v1" && result.analysisMode !== "graph-v2") || typeof result.complete !== "boolean")) {
       throw new Error("graph compiler returned a snapshot without graph completeness metadata");
     }
     if (this.#disposed || epoch !== this.#epoch) return undefined;

@@ -1,9 +1,17 @@
 # Graph-aware compiler analysis
 
 The server negotiates capabilities rather than checking a compiler version. It
-requests `analysisMode: "graph-v1"` on schema/protocol 1. A compiler that ignores
+requests `analysisMode: "graph-v2"` on schema/protocol 1, then `"graph-v1"`. A compiler that ignores
 that field keeps the legacy path. An explicit `unsupported_analysis_mode`
-response causes a fresh child to initialize without the field. Other failures
+response causes a fresh child to initialize with the next older mode (graph-v2, graph-v1, none).
+
+graph-v2 (capabilities `stable-declaration-ids-v1` and `analysis-since-v1`) names declarations by module,
+container and name rather than by offset, and answers `analyze` with `since` (the client's last revision) with only the
+documents that changed (`documents`), the uris of the others (`unchanged`) and of those that left the graph (`removed`),
+`full: false`; a revision it no longer holds gets everything (`full: true`). `CompilerClient.analyze` holds the last
+answer and merges each delta into it, so callers still get a whole snapshot; it asks for a delta only when the same
+`fields` were asked for the held answer. On the compiler's own source an edit to a function body sends 0.2 MB
+instead of 84 MB. Other failures
 are logged and retried with bounded backoff, not silently treated as old compilers.
 
 Graph mode requires `module-graph-analysis-v1` and `no-eval-ct`. It uses the

@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import { appendFileSync } from "node:fs";
 const mode=process.argv[2] ?? 'graph'; const trace=process.argv[3];
-const documents=new Map(); let revision=0; let graph=false;
+const documents=new Map(); let revision=0; let graph=false; let stable=false; const generations=new Map();
 const write=(id,result)=>process.stdout.write(JSON.stringify({schema:1,id,result})+'\n');
 const error=(id,code,message)=>process.stdout.write(JSON.stringify({schema:1,id,error:{code,message}})+'\n');
 const bytes=(text,at)=>Buffer.byteLength(text.slice(0,at),'utf8');
@@ -17,8 +17,11 @@ createInterface({input:process.stdin}).on('line',line=>{
  if(method==='initialize') {
   if(params.analysisMode && mode==='reject'){error(id,'unsupported_analysis_mode','old compiler');return;}
   if(params.analysisMode && mode==='broken'){error(id,'internal_error','startup failure stays visible');return;}
-  graph=params.analysisMode==='graph-v1' && mode!=='ignore';
-  write(id,{compilerVersion:'test',protocolVersion:1,capabilities:graph?['module-graph-analysis-v1','no-eval-ct','analysis-fields-v1',...(mode==='graph-no-queries'?[]:['analysis-queries-v1'])]:['declarations']});return;
+  // 'graph2' has graph-v2 (stable ids, since); the others know graph-v1 only and refuse a mode they do not know, as the compiler does.
+  if(params.analysisMode==='graph-v2' && mode!=='graph2' && mode!=='ignore'){error(id,'unsupported_analysis_mode','this compiler has graph-v1 only');return;}
+  stable=params.analysisMode==='graph-v2' && mode==='graph2';
+  graph=(params.analysisMode==='graph-v1'||stable) && mode!=='ignore';
+  write(id,{compilerVersion:'test',protocolVersion:1,capabilities:graph?['module-graph-analysis-v1','no-eval-ct','analysis-fields-v1',...(stable?['stable-declaration-ids-v1','analysis-since-v1']:[]),...(mode==='graph-no-queries'?[]:['analysis-queries-v1'])]:['declarations']});return;
  }
  if(method==='document/open'||method==='document/change'){documents.set(params.uri,{uri:params.uri,version:params.version,text:params.text});revision++;write(id,null);return;}
  if(method==='document/close'){documents.delete(params.uri);revision++;write(id,null);return;}
@@ -27,7 +30,15 @@ createInterface({input:process.stdin}).on('line',line=>{
  if(method==='analyze') {
   const fields=graph?params.fields:undefined;
   const values=fields===undefined?docs:docs.map(d=>Object.fromEntries(Object.entries(d).filter(([k])=>['uri','version','text',...fields].includes(k))));
-  write(id,{revision:String(revision),documents:values,...(graph?{analysisMode:'graph-v1',complete:pending.length===0,pending,entry:'main.ab',...(fields===undefined?{}:{fields})}:{})});return;
+  const current=new Map(values.map(d=>[d.uri,JSON.stringify(d)]));
+  let delta={};let shown=values;
+  if(stable&&params.since!==undefined){
+   const previous=generations.get(params.since);
+   if(previous===undefined)delta={since:params.since,full:true};
+   else{shown=values.filter(d=>previous.get(d.uri)!==current.get(d.uri));delta={since:params.since,full:false,unchanged:values.filter(d=>previous.get(d.uri)===current.get(d.uri)).map(d=>d.uri),removed:[...previous.keys()].filter(uri=>!current.has(uri))};}
+  }
+  if(stable)generations.set(String(revision),current);
+  write(id,{revision:String(revision),documents:shown,...(graph?{analysisMode:stable?'graph-v2':'graph-v1',complete:pending.length===0,pending,entry:'main.ab',...(fields===undefined?{}:{fields}),...delta}:{})});return;
  }
  if(method.startsWith('query/')) {
   if(!graph||mode==='graph-no-queries'){error(id,'method_not_found','unsupported query');return;}

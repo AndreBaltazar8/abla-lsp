@@ -44,7 +44,7 @@ for(const mode of ['ignore','reject','graph-no-queries','graph'])test(`LSP compi
   assert.ok(before.filter(m=>m.method==='analyze').every(m=>Array.isArray(m.params.fields)),'navigation forced an occurrence dump');
  }else assert.ok(!before.some(m=>m.method.startsWith('query/')));
  if(mode==='reject'){
-  const init=before.filter(m=>m.method==='initialize');assert.equal(init[0]?.params.analysisMode,'graph-v1');assert.equal(init[1]?.params.analysisMode,undefined);assert.notEqual(init[0]?.pid,init[1]?.pid);
+  const init=before.filter(m=>m.method==='initialize');assert.deepEqual(init.map(m=>m.params.analysisMode),['graph-v2','graph-v1',undefined]);assert.equal(new Set(init.map(m=>m.pid)).size,3);
  }
  const rename=await server.request('textDocument/rename',{textDocument:{uri:f.uri},position:{line:1,character:5},newName:'renamed'});assert.equal(rename.error,undefined,JSON.stringify(rename.error));
  if(mode==='graph')assert.ok((await trace(log)).some(m=>m.method==='analyze'&&m.params.fields===undefined),'rename did not fetch complete occurrences');
@@ -58,7 +58,7 @@ test('unrelated initialization errors are visible and never silently downgrade',
  const f=await fixture();const log=path.join(f.root,'trace');const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
  const reply=await server.request('initialize',{rootUri:pathToFileURL(f.root).href,capabilities:{},initializationOptions:{compiler:{path:process.execPath,arguments:[path.resolve('test/fixtures/fake-graph-ablac.mjs'),'broken',log]}}});assert.equal(reply.error,undefined);server.notify('initialized',{});
  await server.wait(m=>m.method==='window/logMessage'&&String((m.params as {message?:string})?.message).includes('startup failure stays visible'));
- assert.ok((await trace(log)).filter(m=>m.method==='initialize').every(m=>m.params.analysisMode==='graph-v1'));
+ assert.deepEqual((await trace(log)).filter(m=>m.method==='initialize').map(m=>m.params.analysisMode),['graph-v2']);
 });
 const real=process.env.ABLA_COMPILER_GRAPH;
 test('real master compiler through LSP: graph queries and incomplete refactor refusal',{skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000},async context=>{

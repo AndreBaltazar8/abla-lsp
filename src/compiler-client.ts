@@ -16,6 +16,7 @@ import {
   type CompilerValidateEditResult,
   type CompilerWorkspaceSnapshot,
   type CompilerWireSnapshot,
+  type CompilerDocumentSnapshot,
   type CompilerPositionParams,
   type CompilerQueryResult,
   type CompilerLocation,
@@ -57,6 +58,11 @@ export class CompilerClient {
   #stopping = false;
   #sourceRevision: string | undefined;
   readonly #sources = new Map<string, { readonly uri: string; readonly map: Utf8OffsetMap }>();
+  // graph-v2 `since`: the last answer held (normalized), the revision and the fields it was asked with, and whether the compiler offers it.
+  #since = false;
+  readonly #held = new Map<string, CompilerDocumentSnapshot>();
+  #heldRevision: string | undefined;
+  #heldFields: string | undefined;
 
   constructor(options: CompilerClientOptions) {
     this.#options = options;
@@ -67,6 +73,7 @@ export class CompilerClient {
     this.#stopping = false;
     this.#sourceRevision = undefined;
     this.#sources.clear();
+    this.#since = false; this.#held.clear(); this.#heldRevision = undefined; this.#heldFields = undefined;
     const child = spawn(
       this.#options.executable,
       [...(this.#options.arguments ?? ["analyze", "--stdio"])],
@@ -92,7 +99,9 @@ export class CompilerClient {
         this.#options.onExit?.(error);
       }
     });
-    return this.request<CompilerInitializeResult>("initialize", params);
+    const initialized = await this.request<CompilerInitializeResult>("initialize", params);
+    this.#since = params.analysisMode === "graph-v2" && initialized.capabilities.includes("analysis-since-v1");
+    return initialized;
   }
 
   open(params: CompilerDocumentParams, signal?: AbortSignal): Promise<void> {
@@ -111,17 +120,64 @@ export class CompilerClient {
     params: CompilerAnalyzeParams = {},
     signal?: AbortSignal,
   ): Promise<CompilerWorkspaceSnapshot> {
+    // With `since` the compiler sends only what changed from the answer held; the same fields must have been asked for, or the held
+    // documents would lack what this one wants.
+    const fields = JSON.stringify(params.fields ?? null);
+    const delta = this.#since && this.#heldRevision !== undefined && this.#heldFields === fields;
     const snapshot = await this.request<CompilerWireSnapshot>(
       "analyze",
-      params,
+      delta ? { ...params, since: this.#heldRevision } : params,
       signal,
     );
+    if (delta && snapshot.full === false && this.#canMerge(snapshot)) return this.#merge(snapshot, fields);
+    if (delta && snapshot.full === false) {
+      // A delta that does not fit what is held (it should not happen): start again from a whole answer.
+      this.#held.clear(); this.#heldRevision = undefined;
+      return this.analyze(params, signal);
+    }
     this.#sourceRevision = snapshot.revision;
     this.#sources.clear();
     for (const document of snapshot.documents) {
       this.#sources.set(compilerUriKey(document.uri), { uri: document.uri, map: new Utf8OffsetMap(document.text) });
     }
-    return normalizeCompilerSnapshot(snapshot, new Map([...this.#sources].map(([uri, source]) => [uri, source.map])));
+    const normalized = normalizeCompilerSnapshot(withoutDelta(snapshot), new Map([...this.#sources].map(([uri, source]) => [uri, source.map])));
+    this.#remember(normalized, fields);
+    return normalized;
+  }
+
+  #remember(snapshot: CompilerWorkspaceSnapshot, fields: string): void {
+    this.#held.clear();
+    if (!this.#since) return;
+    for (const document of snapshot.documents) this.#held.set(compilerUriKey(document.uri), document);
+    this.#heldRevision = snapshot.revision; this.#heldFields = fields;
+  }
+
+  /** Every document the compiler calls unchanged is one held. */
+  #canMerge(snapshot: CompilerWireSnapshot): boolean {
+    return (snapshot.unchanged ?? []).every((uri) => this.#held.has(compilerUriKey(uri)));
+  }
+
+  /** The answer held, brought up to date by a delta: unchanged documents kept as they are, changed ones normalized, removed ones gone. */
+  #merge(snapshot: CompilerWireSnapshot, fields: string): CompilerWorkspaceSnapshot {
+    for (const uri of snapshot.removed ?? []) { this.#sources.delete(compilerUriKey(uri)); }
+    for (const document of snapshot.documents) {
+      this.#sources.set(compilerUriKey(document.uri), { uri: document.uri, map: new Utf8OffsetMap(document.text) });
+    }
+    const maps = new Map([...this.#sources].map(([uri, source]) => [uri, source.map]));
+    const changed = normalizeCompilerSnapshot(withoutDelta(snapshot), maps);
+    const replaced = new Map(changed.documents.map((document) => [compilerUriKey(document.uri), document]));
+    const gone = new Set((snapshot.removed ?? []).map(compilerUriKey));
+    const documents: CompilerDocumentSnapshot[] = [];
+    for (const [key, held] of this.#held) {
+      if (gone.has(key)) continue;
+      documents.push(replaced.get(key) ?? held);
+      replaced.delete(key);
+    }
+    for (const document of replaced.values()) documents.push(document);
+    const merged: CompilerWorkspaceSnapshot = { ...changed, documents };
+    this.#sourceRevision = merged.revision;
+    this.#remember(merged, fields);
+    return merged;
   }
 
   async definition(params: CompilerPositionParams, signal?: AbortSignal): Promise<CompilerQueryResult<AblaSymbol | null>> {
@@ -280,4 +336,10 @@ export class CompilerClient {
     }
     this.#pending.clear();
   }
+}
+
+/** `snapshot` without the fields of a delta (they are not part of the normalized model). */
+function withoutDelta(snapshot: CompilerWireSnapshot): CompilerWireSnapshot {
+  const { since: _since, full: _full, unchanged: _unchanged, removed: _removed, ...rest } = snapshot;
+  return rest;
 }

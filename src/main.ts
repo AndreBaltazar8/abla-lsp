@@ -407,13 +407,16 @@ async function startCompiler(): Promise<void> {
   try {
     const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0" };
     let initialized;
-    try { initialized = await candidate.start({ ...initialize, analysisMode: "graph-v1" }); }
-    catch (error) {
-      if (!(error instanceof CompilerProtocolError) || error.code !== "unsupported_analysis_mode") throw error;
-      connection.console.info("compiler rejects graph-v1; reconnecting with legacy schema 1");
-      await candidate.stop().catch(() => undefined); candidate = createClient();
-      initialized = await candidate.start(initialize);
+    // The newest analysis mode the compiler has: graph-v2 (stable declaration ids, analyze with since), else graph-v1, else the legacy schema 1.
+    for (const mode of ["graph-v2", "graph-v1", undefined] as const) {
+      try { initialized = await candidate.start(mode === undefined ? initialize : { ...initialize, analysisMode: mode }); break; }
+      catch (error) {
+        if (!(error instanceof CompilerProtocolError) || error.code !== "unsupported_analysis_mode" || mode === undefined) throw error;
+        connection.console.info(`compiler rejects ${mode}; reconnecting with ${mode === "graph-v2" ? "graph-v1" : "legacy schema 1"}`);
+        await candidate.stop().catch(() => undefined); candidate = createClient();
+      }
     }
+    if (initialized === undefined) throw new Error("compiler analysis did not start");
     if (initialized.protocolVersion !== 1) throw new Error(`compiler analysis protocol ${initialized.protocolVersion} is unsupported`);
     const workspace = new CompilerWorkspace(candidate, {
       roots: workspaceRoots, capabilities: initialized.capabilities,
@@ -421,7 +424,7 @@ async function startCompiler(): Promise<void> {
       log: (message) => connection.console.warn(`compiler analysis failed: ${message}`),
     });
     compiler = candidate; compilerWorkspace = workspace; compilerRestartAttempt = 0;
-    connection.console.info(`connected to ablac ${initialized.compilerVersion} analysis protocol 1 (${workspace.graph ? "graph-v1, no CT evaluation" : "legacy"})`);
+    connection.console.info(`connected to ablac ${initialized.compilerVersion} analysis protocol 1 (${workspace.graph ? `${workspace.stableIds ? "graph-v2" : "graph-v1"}, no CT evaluation` : "legacy"})`);
     for (const document of documents.all()) await workspace.update("open", { uri: document.uri, version: document.version, text: document.getText() });
     workspace.schedule(0);
   } catch (error) {
@@ -476,7 +479,7 @@ function acceptCompilerSnapshot(snapshot: CompilerWorkspaceSnapshot): void {
       diagnostics: document.diagnostics,
       ...(document.occurrencesAvailable === false && !retained ? { occurrencesAvailable: false } : {}),
       ...(snapshot.complete === undefined ? {} : { analysisComplete: snapshot.complete }),
-      ...(snapshot.analysisMode === "graph-v1" ? { writable: ownedSource(document.uri, workspaceRoots) } : {}),
+      ...(snapshot.analysisMode === "graph-v1" || snapshot.analysisMode === "graph-v2" ? { writable: ownedSource(document.uri, workspaceRoots) } : {}),
     };
     index.upsertAnalysis(analysis);
     if (documents.get(document.uri) !== undefined && document.diagnosticsAvailable !== false) {

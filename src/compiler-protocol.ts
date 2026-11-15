@@ -22,7 +22,7 @@ export interface CompilerPendingDiagnostic {
   readonly message: string;
 }
 export interface CompilerGraphMetadata {
-  readonly analysisMode?: "graph-v1";
+  readonly analysisMode?: "graph-v1" | "graph-v2";
   readonly entry?: string;
   readonly complete?: boolean;
   readonly pending?: readonly CompilerPendingDiagnostic[];
@@ -42,6 +42,12 @@ export interface CompilerWireDocument extends Omit<CompilerDocumentSnapshot, "sy
 }
 export interface CompilerWireSnapshot extends Omit<CompilerWorkspaceSnapshot, "documents"> {
   readonly documents: readonly CompilerWireDocument[];
+  /** graph-v2 answers to an analyze that carried `since`: `documents` are only those that changed or are new, `unchanged` and
+   *  `removed` list the uris of the others; `full` is true when the compiler no longer held that revision (everything follows). */
+  readonly since?: string;
+  readonly full?: boolean;
+  readonly unchanged?: readonly string[];
+  readonly removed?: readonly string[];
 }
 export type CompilerQueryMethod = "query/definition" | "query/hover" | "query/references";
 export interface CompilerPositionParams {
@@ -60,7 +66,7 @@ export interface CompilerInitializeParams {
   readonly workspaceRoots: readonly string[];
   readonly clientName: string;
   readonly clientVersion: string;
-  readonly analysisMode?: "graph-v1";
+  readonly analysisMode?: "graph-v1" | "graph-v2";
   readonly entryPoints?: readonly string[];
 }
 
@@ -83,6 +89,8 @@ export interface CompilerCloseDocumentParams {
 export interface CompilerAnalyzeParams {
   readonly roots?: readonly string[];
   readonly fields?: readonly CompilerAnalysisField[];
+  /** graph-v2 with `analysis-since-v1`: only what differs from this revision. The client sets it itself (see CompilerClient.analyze). */
+  readonly since?: string;
 }
 
 export interface CompilerTextEdit {
