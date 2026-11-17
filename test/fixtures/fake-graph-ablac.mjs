@@ -8,7 +8,7 @@ const bytes=(text,at)=>Buffer.byteLength(text.slice(0,at),'utf8');
 function document(value) {
  const matches=[...value.text.matchAll(/\btarget\b/g)];const at=matches[0]?.index??-1;
  const id=value.uri+'#target';
- const symbol=at<0?undefined:{id,name:'target',kind:'function',uri:value.uri,range:{start:0,end:Buffer.byteLength(value.text)},selectionRange:{start:bytes(value.text,at),end:bytes(value.text,at+6)},detail:'fun int',topLevel:true};
+ const symbol=at<0?undefined:{id,name:'target',kind:'function',uri:value.uri,range:{start:0,end:Buffer.byteLength(value.text)},selectionRange:{start:bytes(value.text,at),end:bytes(value.text,at+6)},detail:'fun int',topLevel:true,documentation:'The answer to everything.'};
  return {...value,symbols:symbol?[symbol]:[],occurrences:matches.map(m=>({name:'target',range:{start:bytes(value.text,m.index),end:bytes(value.text,m.index+6)},declarationId:id,type:'i64'})),diagnostics:[]};
 }
 createInterface({input:process.stdin}).on('line',line=>{

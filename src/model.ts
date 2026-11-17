@@ -26,6 +26,8 @@ export interface AblaSymbol {
   readonly detail: string;
   readonly topLevel: boolean;
   readonly containerId?: string;
+  /** What the comment above the declaration says of it (graph-v1 and graph-v2 compilers): shown with the declaration on hover. */
+  readonly documentation?: string;
 }
 
 export interface AblaOccurrence {

@@ -819,7 +819,7 @@ connection.onHover(async (params: TextDocumentPositionParams, token): Promise<Ho
     const owner = value.symbol === null ? undefined : query.snapshot?.documents.find((document) => compilerUriKey(document.uri) === compilerUriKey(value.symbol?.uri ?? ""));
     const signature = value.symbol === null ? value.type : owner === undefined ? value.symbol.detail
       : symbolSignature({ ...owner, authority: "compiler" }, value.symbol);
-    return { contents: { kind: "markdown", value: `\`${signature}\`${value.type === "" ? "" : `\n\nType: \`${value.type}\``}\n\nAnalysis: **compiler${query.complete === false ? " (pre-CT; incomplete)" : ""}**` },
+    return { contents: { kind: "markdown", value: `\`${signature}\`${value.symbol?.documentation === undefined || value.symbol.documentation === "" ? "" : `\n\n${value.symbol.documentation}`}${value.type === "" ? "" : `\n\nType: \`${value.type}\``}\n\nAnalysis: **compiler${query.complete === false ? " (pre-CT; incomplete)" : ""}**` },
       range: new PositionMap(source.text).range(value.range) };
   }
   if (!(await ensureCompilerFacts(params.textDocument.uri))) return null;

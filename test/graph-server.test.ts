@@ -36,7 +36,7 @@ for(const mode of ['ignore','reject','graph-no-queries','graph'])test(`LSP compi
  server.notify('textDocument/didOpen',{textDocument:{uri:f.uri,languageId:'abla',version:1,text:f.text}});
  const params={textDocument:{uri:f.uri},position:{line:2,character:18}};
  const definition=await server.request('textDocument/definition',params);assert.equal(definition.error,undefined);assert.equal((definition.result as unknown[]).length,1);
- const hover=await server.request('textDocument/hover',params);assert.equal(hover.error,undefined);assert.match(JSON.stringify(hover.result),/compiler/);
+ const hover=await server.request('textDocument/hover',params);assert.equal(hover.error,undefined);assert.match(JSON.stringify(hover.result),/compiler/);if(mode==='graph')assert.match(JSON.stringify(hover.result),/The answer to everything\./,'hover shows the declaration\'s documentation');
  const references=await server.request('textDocument/references',{...params,context:{includeDeclaration:false}});assert.equal(references.error,undefined);assert.equal((references.result as unknown[]).length,1);
  const before=await trace(log);
  if(mode==='graph'){
