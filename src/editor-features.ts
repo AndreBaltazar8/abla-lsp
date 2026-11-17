@@ -113,8 +113,42 @@ export function callContext(text: string, offset: number): CallContext | undefin
   return undefined;
 }
 
+/** `text` without its comments (each becomes one blank), leaving string literals alone: a signature shows a declaration, not what is written inside it. */
+function withoutComments(text: string): string {
+  let output = "";
+  let index = 0;
+  while (index < text.length) {
+    const character = text[index] ?? "";
+    const next = text[index + 1] ?? "";
+    if (character === '"') {
+      output += character;
+      index += 1;
+      while (index < text.length && text[index] !== '"') {
+        if (text[index] === "\\" && index + 1 < text.length) {
+          output += text[index];
+          index += 1;
+        }
+        output += text[index] ?? "";
+        index += 1;
+      }
+      if (index < text.length) output += '"';
+      index += 1;
+    } else if (character === "/" && next === "*") {
+      const close = text.indexOf("*/", index + 2);
+      index = close < 0 ? text.length : close + 2;
+      output += " ";
+    } else if (character === "/" && next === "/") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+    } else {
+      output += character;
+      index += 1;
+    }
+  }
+  return output;
+}
+
 export function symbolSignature(analysis: DocumentAnalysis, symbol: AblaSymbol): string {
-  const raw = analysis.text.slice(symbol.range.start, symbol.range.end);
+  const raw = withoutComments(analysis.text.slice(symbol.range.start, symbol.range.end));
   let end = raw.length;
   let groups = 0;
   for (let index = 0; index < raw.length; index += 1) {

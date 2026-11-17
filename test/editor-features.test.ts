@@ -6,7 +6,9 @@ import {
   foldingRanges,
   formatDocument,
   organizeImports,
+  symbolSignature,
 } from "../src/editor-features.js";
+import type { AblaSymbol, DocumentAnalysis } from "../src/model.js";
 
 test("signature context tracks nested calls and active arguments", () => {
   const text = "render(title, format(value, 2), ";
@@ -61,4 +63,19 @@ test("import organization sorts and deduplicates the leading import block", () =
   const text = 'import "z.ab"\nimport "a.ab"\nimport "z.ab"\n\nfun main: int = 0\n';
   const edit = organizeImports(text);
   assert.equal(edit?.newText, 'import "a.ab"\nimport "z.ab"');
+});
+
+test("a signature leaves out the comments inside the declaration, and not a string that looks like one", () => {
+  const text = [
+    "class Map<K, V>(",
+    "    /** The number of entries. */",
+    "    val size: int, // how many",
+    "    val label: string = \"a // b /* c */\"",
+    ") {",
+    "    fun get(key: K): V?",
+    "}",
+  ].join("\n");
+  const analysis = { uri: "file:///x.ab", text, version: 1, authority: "compiler", symbols: [], occurrences: [], diagnostics: [] } as unknown as DocumentAnalysis;
+  const symbol = { id: "m", name: "Map", kind: "class", uri: "file:///x.ab", range: { start: 0, end: text.length }, selectionRange: { start: 6, end: 9 }, detail: "class", topLevel: true } as AblaSymbol;
+  assert.equal(symbolSignature(analysis, symbol), 'class Map<K, V>( val size: int, val label: string = "a // b /* c */" )');
 });
