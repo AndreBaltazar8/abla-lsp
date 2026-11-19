@@ -37,12 +37,21 @@ export interface AblaOccurrence {
   readonly type?: string;
 }
 
+/** One fix the compiler gives a diagnostic: edits to apply as they are (analyze `fixes`). */
+export interface AblaFix {
+  readonly title: string;
+  readonly kind: string;
+  readonly edits: readonly { readonly range: OffsetRange; readonly newText: string }[];
+}
+
 export interface AblaDiagnostic {
   readonly code: string;
   readonly message: string;
   readonly range: OffsetRange;
   /** Help lines the compiler gives this diagnostic (analyze `help`), without the `help:` prefix. */
   readonly help?: readonly string[];
+  /** The edits that fix it, when the compiler has them (a did-you-mean, a missing import). */
+  readonly fixes?: readonly AblaFix[];
 }
 
 export interface DocumentAnalysis {

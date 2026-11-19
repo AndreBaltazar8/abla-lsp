@@ -54,7 +54,7 @@ import {
   symbolSignature,
 } from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
-import { diagnosticMessage } from "./diagnostics.js";
+import { dataFixes, diagnosticData, diagnosticMessage } from "./diagnostics.js";
 import { WorkspaceIndex, type EditResult, type RenameRequest } from "./index.js";
 import { PositionMap } from "./positions.js";
 import {
@@ -280,6 +280,7 @@ function publishDiagnostics(analysis: DocumentAnalysis, pending: readonly Compil
       code: diagnostic.code,
       message: diagnosticMessage(diagnostic),
       range: positions.range(diagnostic.range),
+      ...(diagnosticData(diagnostic, positions) === undefined ? {} : { data: diagnosticData(diagnostic, positions) }),
     })), ...pending.map((site) => ({
       severity: DiagnosticSeverity.Information, source: "ablac", code: site.code,
       message: site.message, range: positions.range(site.range),
@@ -1069,7 +1070,22 @@ connection.onCodeAction(async (params) => {
   ) {
     const positions = new PositionMap(analysis.text);
     for (const diagnostic of params.context.diagnostics) {
-      if (diagnostic.source !== "ablac" || diagnostic.code !== "E_SEMANTIC") continue;
+      if (diagnostic.source !== "ablac") continue;
+      // The compiler's own fixes (a did-you-mean, a missing import) come as edits in the diagnostic's data.
+      const given = dataFixes(diagnostic.data);
+      for (const fix of given) {
+        // Several diagnostics can ask for the same import: one action for it.
+        if (actions.some((action) => action.title === fix.title && JSON.stringify(action.edit) === JSON.stringify({ changes: { [analysis.uri]: fix.edits.map((edit) => ({ range: edit.range, newText: edit.newText })) } }))) continue;
+        actions.push({
+          title: fix.title,
+          kind: CodeActionKind.QuickFix,
+          diagnostics: [diagnostic],
+          isPreferred: given.length === 1,
+          edit: { changes: { [analysis.uri]: fix.edits.map((edit) => ({ range: edit.range, newText: edit.newText })) } },
+        });
+      }
+      // Only a diagnostic without fixes of the compiler's gets the editor's own spelling guess (an older compiler).
+      if (given.length > 0 || diagnostic.code !== "E_SEMANTIC") continue;
       const start = positions.offset(diagnostic.range.start);
       const end = positions.offset(diagnostic.range.end);
       const misspelled = analysis.text.slice(start, end);

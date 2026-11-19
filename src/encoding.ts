@@ -80,6 +80,12 @@ export function normalizeCompilerSnapshot(
         diagnostics: (document.diagnostics ?? []).map((diagnostic) => ({
           ...diagnostic,
           range: offsets.range(diagnostic.range),
+          ...(diagnostic.fixes === undefined ? {} : {
+            fixes: diagnostic.fixes.map((fix) => ({
+              ...fix,
+              edits: fix.edits.map((edit) => ({ ...edit, range: offsets.range(edit.range) })),
+            })),
+          }),
         })),
       };
     }),

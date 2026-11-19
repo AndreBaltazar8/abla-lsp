@@ -106,7 +106,12 @@ input.on("line", (line) => {
               ...document,
               symbols,
               occurrences,
-              diagnostics: [misspelled >= 0 ? {
+              diagnostics: [...(document.text.indexOf("usesIo") >= 0 ? [{
+                code: "E_SEMANTIC", message: "error[E_SEMANTIC]: call.target:usesIo",
+                range: { start: document.text.indexOf("usesIo"), end: document.text.indexOf("usesIo") + 6 },
+                help: ["`usesIo` is declared in abla/io; add `import \"abla/io\"`"],
+                fixes: [{ title: "Add import \"abla/io\"", kind: "import", edits: [{ range: { start: 0, end: 0 }, newText: "import \"abla/io\"\n" }] }],
+              }] : []), misspelled >= 0 ? {
                 code: "E_SEMANTIC", message: "unknown name buidl",
                 range: { start: misspelled, end: misspelled + 5 },
               } : {

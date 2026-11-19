@@ -293,6 +293,7 @@ test("compiler snapshots drive type definitions", async (context) => {
         'fun main: int = build("x", 2)',
         "fun show(widget: Widget): int = widget.",
         'fun typo: int = buidl("x", 2)',
+        "val unused = usesIo",
         "",
       ].join("\n"),
     },
@@ -344,7 +345,13 @@ test("compiler snapshots drive type definitions", async (context) => {
   const fixes = quickFixes.result as Array<{
     edit: { changes: Record<string, Array<{ newText: string }>> };
   }>;
-  assert.equal(fixes[0]?.edit.changes[uri]?.[0]?.newText, "build");
+  assert.ok(fixes.some((action) => action.edit.changes[uri]?.[0]?.newText === "build"));
+  // The compiler's own fix arrives as edits in the diagnostic's data and becomes an action with the compiler's title and edit;
+  // its help lines are under the message.
+  const missingImport = published.diagnostics.find((diagnostic) => diagnostic.message.startsWith("error[E_SEMANTIC]: call.target:usesIo"));
+  assert.ok(missingImport?.message.includes("\nhelp: `usesIo` is declared in abla/io"), "the help lines follow the message");
+  const importFix = fixes.find((action) => (action as { title?: string }).title === "Add import \"abla/io\"");
+  assert.deepEqual(importFix?.edit.changes[uri], [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: "import \"abla/io\"\n" }]);
 });
 
 test("execute-command refactors are compiler validated and applied as workspace edits", async (context) => {
