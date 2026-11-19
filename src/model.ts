@@ -41,6 +41,8 @@ export interface AblaDiagnostic {
   readonly code: string;
   readonly message: string;
   readonly range: OffsetRange;
+  /** Help lines the compiler gives this diagnostic (analyze `help`), without the `help:` prefix. */
+  readonly help?: readonly string[];
 }
 
 export interface DocumentAnalysis {

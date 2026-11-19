@@ -31,7 +31,7 @@ test("normalizes every compiler source range", () => {
           },
         ],
         occurrences: [{ name: "greet", range: { start: 13, end: 18 } }],
-        diagnostics: [{ code: "E_TEST", message: "test", range: { start: 9, end: 10 } }],
+        diagnostics: [{ code: "E_TEST", message: "test", range: { start: 9, end: 10 }, help: ["a help line"] }],
       },
     ],
   });
@@ -39,6 +39,7 @@ test("normalizes every compiler source range", () => {
   assert.deepEqual(document?.symbols[0]?.selectionRange, { start: 12, end: 17 });
   assert.deepEqual(document?.occurrences[0]?.range, { start: 12, end: 17 });
   assert.deepEqual(document?.diagnostics[0]?.range, { start: 8, end: 9 });
+  assert.deepEqual(document?.diagnostics[0]?.help, ["a help line"]);
 });
 
 test("reverse offsets preserve scalar boundaries including surrogate interiors", () => {

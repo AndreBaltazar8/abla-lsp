@@ -54,6 +54,7 @@ import {
   symbolSignature,
 } from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
+import { diagnosticMessage } from "./diagnostics.js";
 import { WorkspaceIndex, type EditResult, type RenameRequest } from "./index.js";
 import { PositionMap } from "./positions.js";
 import {
@@ -277,7 +278,7 @@ function publishDiagnostics(analysis: DocumentAnalysis, pending: readonly Compil
       severity: DiagnosticSeverity.Error,
       source: analysis.authority === "compiler" ? "ablac" : "abla-syntax",
       code: diagnostic.code,
-      message: diagnostic.message,
+      message: diagnosticMessage(diagnostic),
       range: positions.range(diagnostic.range),
     })), ...pending.map((site) => ({
       severity: DiagnosticSeverity.Information, source: "ablac", code: site.code,
