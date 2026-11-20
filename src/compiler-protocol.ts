@@ -68,6 +68,8 @@ export interface CompilerInitializeParams {
   readonly clientVersion: string;
   readonly analysisMode?: "graph-v1" | "graph-v2";
   readonly entryPoints?: readonly string[];
+  /** Ask for W_UNUSED_IMPORT warnings in the analysis (graph modes). */
+  readonly unusedImports?: boolean;
 }
 
 export interface CompilerInitializeResult {

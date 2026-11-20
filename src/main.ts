@@ -8,6 +8,7 @@ import {
   createConnection,
   CompletionItemKind,
   DiagnosticSeverity,
+  DiagnosticTag,
   DocumentHighlightKind,
   DocumentSymbol,
   ErrorCodes,
@@ -90,7 +91,8 @@ let compilerConfiguration: {
   readonly enabled: boolean;
   readonly path: string;
   readonly arguments?: readonly string[];
-} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac" };
+  readonly unusedImports: boolean;
+} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true };
 let compiler: CompilerClient | undefined;
 let compilerRevision: string | undefined;
 let compilerSnapshot: CompilerWorkspaceSnapshot | undefined;
@@ -105,6 +107,8 @@ interface InitializationOptions {
     readonly enabled?: boolean;
     readonly path?: string;
     readonly arguments?: readonly string[];
+    /** Grey out and warn about imports nothing uses (default on; needs a compiler that has it). */
+    readonly unusedImports?: boolean;
   };
 }
 
@@ -275,7 +279,8 @@ function publishDiagnostics(analysis: DocumentAnalysis, pending: readonly Compil
     uri: analysis.uri,
     version: analysis.version,
     diagnostics: [...analysis.diagnostics.map((diagnostic) => ({
-      severity: DiagnosticSeverity.Error,
+      severity: diagnostic.severity === "warning" ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error,
+      ...(diagnostic.tags?.includes("unnecessary") ? { tags: [DiagnosticTag.Unnecessary] } : {}),
       source: analysis.authority === "compiler" ? "ablac" : "abla-syntax",
       code: diagnostic.code,
       message: diagnosticMessage(diagnostic),
@@ -294,6 +299,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   compilerConfiguration = {
     enabled: configured?.enabled ?? true,
     path: configured?.path ?? process.env.ABLA_COMPILER ?? "ablac",
+    unusedImports: configured?.unusedImports ?? true,
     ...(configured?.arguments === undefined ? {} : { arguments: configured.arguments }),
   };
   const roots = params.workspaceFolders?.map((folder) => folder.uri) ??
@@ -407,7 +413,7 @@ async function startCompiler(): Promise<void> {
   };
   let candidate = createClient();
   try {
-    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0" };
+    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports };
     let initialized;
     // The newest analysis mode the compiler has: graph-v2 (stable declaration ids, analyze with since), else graph-v1, else the legacy schema 1.
     for (const mode of ["graph-v2", "graph-v1", undefined] as const) {

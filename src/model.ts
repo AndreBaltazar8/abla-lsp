@@ -50,6 +50,10 @@ export interface AblaDiagnostic {
   readonly range: OffsetRange;
   /** Help lines the compiler gives this diagnostic (analyze `help`), without the `help:` prefix. */
   readonly help?: readonly string[];
+  /** "warning" for a compiler warning (W_UNUSED_IMPORT); absent is an error. */
+  readonly severity?: "warning";
+  /** "unnecessary": the range is shown greyed out. */
+  readonly tags?: readonly string[];
   /** The edits that fix it, when the compiler has them (a did-you-mean, a missing import). */
   readonly fixes?: readonly AblaFix[];
 }

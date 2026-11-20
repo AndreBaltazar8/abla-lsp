@@ -294,6 +294,7 @@ test("compiler snapshots drive type definitions", async (context) => {
         "fun show(widget: Widget): int = widget.",
         'fun typo: int = buidl("x", 2)',
         "val unused = usesIo",
+        "import \"abla/unused\"",
         "",
       ].join("\n"),
     },
@@ -348,6 +349,10 @@ test("compiler snapshots drive type definitions", async (context) => {
   assert.ok(fixes.some((action) => action.edit.changes[uri]?.[0]?.newText === "build"));
   // The compiler's own fix arrives as edits in the diagnostic's data and becomes an action with the compiler's title and edit;
   // its help lines are under the message.
+  const warned = published.diagnostics.find((diagnostic) => diagnostic.code === "W_UNUSED_IMPORT") as { severity: number; tags?: number[] } | undefined;
+  assert.equal(warned?.severity, 2, "a warning");
+  assert.deepEqual(warned?.tags, [1], "greyed out");
+  assert.ok(fixes.some((action) => (action as { title?: string }).title === "Remove unused import"));
   const missingImport = published.diagnostics.find((diagnostic) => diagnostic.message.startsWith("error[E_SEMANTIC]: call.target:usesIo"));
   assert.ok(missingImport?.message.includes("\nhelp: `usesIo` is declared in abla/io"), "the help lines follow the message");
   const importFix = fixes.find((action) => (action as { title?: string }).title === "Add import \"abla/io\"");

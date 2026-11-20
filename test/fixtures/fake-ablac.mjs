@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 
+let unusedImports = false;
 const cancelled = new Set();
 const documents = new Map();
 const input = createInterface({ input: process.stdin });
@@ -15,6 +16,7 @@ input.on("line", (line) => {
     return;
   }
   if (message.method === "initialize") {
+    unusedImports = message.params?.unusedImports === true;
     respond(message.id, {
       compilerVersion: "0.2.11-test",
       protocolVersion: 1,
@@ -106,7 +108,12 @@ input.on("line", (line) => {
               ...document,
               symbols,
               occurrences,
-              diagnostics: [...(document.text.indexOf("usesIo") >= 0 ? [{
+              diagnostics: [...(unusedImports && document.text.indexOf("import \"abla/unused\"\n") >= 0 ? [{
+                code: "W_UNUSED_IMPORT", message: "warning[W_UNUSED_IMPORT]: nothing `import \"abla/unused\"` declares is used here",
+                range: { start: document.text.indexOf("import \"abla/unused\""), end: document.text.indexOf("import \"abla/unused\"") + 19 },
+                severity: "warning", tags: ["unnecessary"],
+                fixes: [{ title: "Remove unused import", kind: "remove", edits: [{ range: { start: document.text.indexOf("import \"abla/unused\""), end: document.text.indexOf("import \"abla/unused\"") + 20 }, newText: "" }] }],
+              }] : []), ...(document.text.indexOf("usesIo") >= 0 ? [{
                 code: "E_SEMANTIC", message: "error[E_SEMANTIC]: call.target:usesIo",
                 range: { start: document.text.indexOf("usesIo"), end: document.text.indexOf("usesIo") + 6 },
                 help: ["`usesIo` is declared in abla/io; add `import \"abla/io\"`"],
