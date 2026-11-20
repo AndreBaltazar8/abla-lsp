@@ -72,6 +72,8 @@ export interface CompilerInitializeParams {
   readonly unusedImports?: boolean;
   /** Ask for W_UNUSED_LOCAL warnings too (graph modes). */
   readonly unusedLocals?: boolean;
+  /** Ask for W_UNUSED_PARAMETER warnings too (graph modes). */
+  readonly unusedParameters?: boolean;
 }
 
 export interface CompilerInitializeResult {

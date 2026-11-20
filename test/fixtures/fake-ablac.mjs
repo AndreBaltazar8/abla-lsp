@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 
 let unusedImports = false;
 let unusedLocals = false;
+let unusedParameters = false;
 const cancelled = new Set();
 const documents = new Map();
 const input = createInterface({ input: process.stdin });
@@ -19,6 +20,7 @@ input.on("line", (line) => {
   if (message.method === "initialize") {
     unusedImports = message.params?.unusedImports === true;
     unusedLocals = message.params?.unusedLocals === true;
+    unusedParameters = message.params?.unusedParameters === true;
     respond(message.id, {
       compilerVersion: "0.2.11-test",
       protocolVersion: 1,
@@ -110,7 +112,12 @@ input.on("line", (line) => {
               ...document,
               symbols,
               occurrences,
-              diagnostics: [...(unusedLocals && document.text.indexOf("val dead") >= 0 ? [{
+              diagnostics: [...(unusedParameters && document.text.indexOf("(ignored") >= 0 ? [{
+                code: "W_UNUSED_PARAMETER", message: "warning[W_UNUSED_PARAMETER]: x.ab: parameter `ignored` is never used",
+                range: { start: document.text.indexOf("ignored"), end: document.text.indexOf("ignored") + 7 },
+                severity: "warning", tags: ["unnecessary"],
+                fixes: [{ title: "Rename `ignored` to `_ignored`", kind: "replace", edits: [{ range: { start: document.text.indexOf("ignored"), end: document.text.indexOf("ignored") + 7 }, newText: "_ignored" }] }],
+              }] : []), ...(unusedLocals && document.text.indexOf("val dead") >= 0 ? [{
                 code: "W_UNUSED_LOCAL", message: "warning[W_UNUSED_LOCAL]: x.ab: `dead` is never used",
                 range: { start: document.text.indexOf("dead"), end: document.text.indexOf("dead") + 4 },
                 severity: "warning", tags: ["unnecessary"],

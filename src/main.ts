@@ -93,7 +93,8 @@ let compilerConfiguration: {
   readonly arguments?: readonly string[];
   readonly unusedImports: boolean;
   readonly unusedLocals: boolean;
-} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true, unusedLocals: false };
+  readonly unusedParameters: boolean;
+} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true, unusedLocals: false, unusedParameters: false };
 let compiler: CompilerClient | undefined;
 let compilerRevision: string | undefined;
 let compilerSnapshot: CompilerWorkspaceSnapshot | undefined;
@@ -112,6 +113,8 @@ interface InitializationOptions {
     readonly unusedImports?: boolean;
     /** Grey out and warn about locals nothing uses (off by default while the compiler measures it). */
     readonly unusedLocals?: boolean;
+    /** Grey out and warn about function parameters nothing uses (off by default while the compiler measures it). */
+    readonly unusedParameters?: boolean;
   };
 }
 
@@ -304,6 +307,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     path: configured?.path ?? process.env.ABLA_COMPILER ?? "ablac",
     unusedImports: configured?.unusedImports ?? true,
     unusedLocals: configured?.unusedLocals ?? false,
+    unusedParameters: configured?.unusedParameters ?? false,
     ...(configured?.arguments === undefined ? {} : { arguments: configured.arguments }),
   };
   const roots = params.workspaceFolders?.map((folder) => folder.uri) ??
@@ -417,7 +421,7 @@ async function startCompiler(): Promise<void> {
   };
   let candidate = createClient();
   try {
-    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports, unusedLocals: compilerConfiguration.unusedLocals };
+    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports, unusedLocals: compilerConfiguration.unusedLocals, unusedParameters: compilerConfiguration.unusedParameters };
     let initialized;
     // The newest analysis mode the compiler has: graph-v2 (stable declaration ids, analyze with since), else graph-v1, else the legacy schema 1.
     for (const mode of ["graph-v2", "graph-v1", undefined] as const) {
