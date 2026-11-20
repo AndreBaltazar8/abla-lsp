@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 
 let unusedImports = false;
+let unusedLocals = false;
 const cancelled = new Set();
 const documents = new Map();
 const input = createInterface({ input: process.stdin });
@@ -17,6 +18,7 @@ input.on("line", (line) => {
   }
   if (message.method === "initialize") {
     unusedImports = message.params?.unusedImports === true;
+    unusedLocals = message.params?.unusedLocals === true;
     respond(message.id, {
       compilerVersion: "0.2.11-test",
       protocolVersion: 1,
@@ -108,7 +110,12 @@ input.on("line", (line) => {
               ...document,
               symbols,
               occurrences,
-              diagnostics: [...(unusedImports && document.text.indexOf("import \"abla/unused\"\n") >= 0 ? [{
+              diagnostics: [...(unusedLocals && document.text.indexOf("val dead") >= 0 ? [{
+                code: "W_UNUSED_LOCAL", message: "warning[W_UNUSED_LOCAL]: x.ab: `dead` is never used",
+                range: { start: document.text.indexOf("dead"), end: document.text.indexOf("dead") + 4 },
+                severity: "warning", tags: ["unnecessary"],
+                fixes: [{ title: "Rename `dead` to `_dead`", kind: "replace", edits: [{ range: { start: document.text.indexOf("dead"), end: document.text.indexOf("dead") + 4 }, newText: "_dead" }] }],
+              }] : []), ...(unusedImports && document.text.indexOf("import \"abla/unused\"\n") >= 0 ? [{
                 code: "W_UNUSED_IMPORT", message: "warning[W_UNUSED_IMPORT]: nothing `import \"abla/unused\"` declares is used here",
                 range: { start: document.text.indexOf("import \"abla/unused\""), end: document.text.indexOf("import \"abla/unused\"") + 19 },
                 severity: "warning", tags: ["unnecessary"],

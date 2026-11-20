@@ -92,7 +92,8 @@ let compilerConfiguration: {
   readonly path: string;
   readonly arguments?: readonly string[];
   readonly unusedImports: boolean;
-} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true };
+  readonly unusedLocals: boolean;
+} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true, unusedLocals: false };
 let compiler: CompilerClient | undefined;
 let compilerRevision: string | undefined;
 let compilerSnapshot: CompilerWorkspaceSnapshot | undefined;
@@ -109,6 +110,8 @@ interface InitializationOptions {
     readonly arguments?: readonly string[];
     /** Grey out and warn about imports nothing uses (default on; needs a compiler that has it). */
     readonly unusedImports?: boolean;
+    /** Grey out and warn about locals nothing uses (off by default while the compiler measures it). */
+    readonly unusedLocals?: boolean;
   };
 }
 
@@ -300,6 +303,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     enabled: configured?.enabled ?? true,
     path: configured?.path ?? process.env.ABLA_COMPILER ?? "ablac",
     unusedImports: configured?.unusedImports ?? true,
+    unusedLocals: configured?.unusedLocals ?? false,
     ...(configured?.arguments === undefined ? {} : { arguments: configured.arguments }),
   };
   const roots = params.workspaceFolders?.map((folder) => folder.uri) ??
@@ -413,7 +417,7 @@ async function startCompiler(): Promise<void> {
   };
   let candidate = createClient();
   try {
-    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports };
+    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports, unusedLocals: compilerConfiguration.unusedLocals };
     let initialized;
     // The newest analysis mode the compiler has: graph-v2 (stable declaration ids, analyze with since), else graph-v1, else the legacy schema 1.
     for (const mode of ["graph-v2", "graph-v1", undefined] as const) {

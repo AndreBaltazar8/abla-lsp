@@ -70,6 +70,8 @@ export interface CompilerInitializeParams {
   readonly entryPoints?: readonly string[];
   /** Ask for W_UNUSED_IMPORT warnings in the analysis (graph modes). */
   readonly unusedImports?: boolean;
+  /** Ask for W_UNUSED_LOCAL warnings too (graph modes). */
+  readonly unusedLocals?: boolean;
 }
 
 export interface CompilerInitializeResult {

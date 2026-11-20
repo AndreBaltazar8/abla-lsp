@@ -271,6 +271,7 @@ test("compiler snapshots drive type definitions", async (context) => {
         enabled: true,
         path: process.execPath,
         arguments: [path.resolve("test/fixtures/fake-ablac.mjs")],
+        unusedLocals: true,
       },
     },
   });
@@ -295,6 +296,7 @@ test("compiler snapshots drive type definitions", async (context) => {
         'fun typo: int = buidl("x", 2)',
         "val unused = usesIo",
         "import \"abla/unused\"",
+        "val dead = 1",
         "",
       ].join("\n"),
     },
@@ -353,6 +355,7 @@ test("compiler snapshots drive type definitions", async (context) => {
   assert.equal(warned?.severity, 2, "a warning");
   assert.deepEqual(warned?.tags, [1], "greyed out");
   assert.ok(fixes.some((action) => (action as { title?: string }).title === "Remove unused import"));
+  assert.ok(fixes.some((action) => (action as { title?: string }).title === "Rename `dead` to `_dead`"), "the unused local's rename");
   const missingImport = published.diagnostics.find((diagnostic) => diagnostic.message.startsWith("error[E_SEMANTIC]: call.target:usesIo"));
   assert.ok(missingImport?.message.includes("\nhelp: `usesIo` is declared in abla/io"), "the help lines follow the message");
   const importFix = fixes.find((action) => (action as { title?: string }).title === "Add import \"abla/io\"");
