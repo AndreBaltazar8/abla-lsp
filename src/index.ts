@@ -402,7 +402,8 @@ export class WorkspaceIndex {
           occurrence.range.end > resolved.symbol.range.end
         ) continue;
         const dependency = this.symbolById(occurrence.declarationId);
-        if (dependency !== undefined) requireImport(request.targetUri, dependency.symbol.uri);
+        // The language's built-in types and members are described by a document that is never imported (the service adds it to its answer).
+        if (dependency !== undefined && !dependency.symbol.uri.endsWith("/abla/builtins/declarations.ab")) requireImport(request.targetUri, dependency.symbol.uri);
       }
     }
     for (const analysis of this.#documents.values()) {

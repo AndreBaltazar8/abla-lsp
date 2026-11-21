@@ -429,3 +429,26 @@ test("declaration move merges imports after a preserved file header", () => {
   assert.equal(importEdit?.range.start.line, 2);
   assert.equal(importEdit?.newText, 'import "source.ab"\nimport "z.ab"\n');
 });
+
+test("a move never imports the built-in declarations document", () => {
+  const index = new WorkspaceIndex(new SyntaxAnalyzer());
+  const builtinUri = "file:///workspace/stdlib/abla/builtins/declarations.ab";
+  const sourceUri = "file:///workspace/source.ab";
+  const targetUri = "file:///workspace/new-target.ab";
+  const builtin = new SyntaxAnalyzer().analyze(builtinUri, 1, "fun builtinThing: int = 0\n");
+  index.upsertAnalysis({ ...builtin, authority: "compiler" });
+  const thing = builtin.symbols.find((symbol) => symbol.name === "builtinThing");
+  const source = "fun moved: int = builtinThing()\n";
+  const syntax = new SyntaxAnalyzer().analyze(sourceUri, 1, source);
+  const moved = syntax.symbols.find((symbol) => symbol.name === "moved");
+  index.upsertAnalysis({
+    ...syntax,
+    authority: "compiler",
+    occurrences: syntax.occurrences.map((occurrence) =>
+      occurrence.name === "builtinThing" && thing !== undefined ? { ...occurrence, declarationId: thing.id } : occurrence),
+  });
+  const result = index.moveDeclarations({ symbolIds: [moved?.id ?? ""], targetUri, createTarget: true });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.ok(!JSON.stringify(result.edit).includes("builtins/declarations.ab"), JSON.stringify(result.edit));
+});
