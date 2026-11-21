@@ -28,6 +28,13 @@ export interface AblaSymbol {
   readonly containerId?: string;
   /** What the comment above the declaration says of it (graph-v1 and graph-v2 compilers): shown with the declaration on hover. */
   readonly documentation?: string;
+  /** Source header and parameter docs exported by the compiler's shared doc extractor. */
+  readonly signature?: string;
+  readonly parameters?: readonly {
+    readonly name: string;
+    readonly label: string;
+    readonly documentation?: string;
+  }[];
 }
 
 export interface AblaOccurrence {

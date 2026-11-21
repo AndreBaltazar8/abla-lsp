@@ -53,6 +53,7 @@ import {
   foldingRanges,
   formatDocument,
   organizeImports,
+  signatureMarkdown,
   symbolSignature,
 } from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
@@ -171,6 +172,22 @@ function completionKind(symbol: AblaSymbol): CompletionItemKind {
   }
 }
 
+const sourceImports = /^\s*(?:export\s+)?import\s+(?:contract\s+)?"([^"\r\n]+)"(?:[\t ]+as[\t ]+([A-Za-z_][A-Za-z0-9_]*))?/gmu;
+
+/** Resolve only documents the compiler has already loaded, including its stdlib module layout. */
+function importedDocument(analysis: DocumentAnalysis, requested: string): DocumentAnalysis | undefined {
+  try {
+    if (requested.startsWith("abla/")) {
+      const matches = index.documents().filter((document) =>
+        new URL(document.uri).pathname.endsWith(`/stdlib/${requested}/entry.ab`));
+      return matches.length === 1 ? matches[0] : undefined;
+    }
+    return index.document(new URL(requested, analysis.uri).href);
+  } catch {
+    return undefined;
+  }
+}
+
 function completionSymbols(
   analysis: DocumentAnalysis,
   offset: number,
@@ -182,6 +199,12 @@ function completionSymbols(
       receiverBegin > 0 &&
       /[A-Za-z0-9_]/u.test(analysis.text[receiverBegin - 1] ?? "")
     ) receiverBegin -= 1;
+    const receiverName = analysis.text.slice(receiverBegin, identifierBegin - 1);
+    for (const match of analysis.text.matchAll(sourceImports)) {
+      if (match[2] === receiverName && match[1] !== undefined) {
+        return importedDocument(analysis, match[1])?.symbols.filter((symbol) => symbol.topLevel) ?? [];
+      }
+    }
     const receiver = analysis.occurrences.find(
       (occurrence) =>
         occurrence.range.start === receiverBegin &&
@@ -215,17 +238,11 @@ function completionSymbols(
     }
   }
   if (analysis.uri.startsWith("file:")) {
-    const imports = /^\s*import\s+(?:contract\s+)?"([^"\r\n]+)"/gmu;
-    for (const match of analysis.text.matchAll(imports)) {
+    for (const match of analysis.text.matchAll(sourceImports)) {
       const requested = match[1];
-      if (requested === undefined || requested.startsWith("abla/")) continue;
-      try {
-        const importedUri = new URL(requested, analysis.uri).href;
-        for (const symbol of index.document(importedUri)?.symbols ?? []) {
-          if (symbol.topLevel) add(symbol);
-        }
-      } catch {
-        // Non-filesystem imports are supplied by the compiler in later schemas.
+      if (requested === undefined || match[2] !== undefined) continue;
+      for (const symbol of importedDocument(analysis, requested)?.symbols ?? []) {
+        if (symbol.topLevel) add(symbol);
       }
     }
   }
@@ -844,9 +861,9 @@ connection.onHover(async (params: TextDocumentPositionParams, token): Promise<Ho
     const source = query.snapshot?.documents.find((document) => compilerUriKey(document.uri) === compilerUriKey(params.textDocument.uri));
     if (source === undefined) return null;
     const owner = value.symbol === null ? undefined : query.snapshot?.documents.find((document) => compilerUriKey(document.uri) === compilerUriKey(value.symbol?.uri ?? ""));
-    const signature = value.symbol === null ? value.type : owner === undefined ? value.symbol.detail
-      : symbolSignature({ ...owner, authority: "compiler" }, value.symbol);
-    return { contents: { kind: "markdown", value: `\`${signature}\`${value.symbol?.documentation === undefined || value.symbol.documentation === "" ? "" : `\n\n${value.symbol.documentation}`}${value.type === "" ? "" : `\n\nType: \`${value.type}\``}\n\nAnalysis: **compiler${query.complete === false ? " (pre-CT; incomplete)" : ""}**` },
+    const signature = value.symbol === null ? value.type : value.symbol.signature ?? (owner === undefined ? value.symbol.detail
+      : symbolSignature({ ...owner, authority: "compiler" }, value.symbol));
+    return { contents: { kind: "markdown", value: `${signatureMarkdown(signature)}${value.symbol?.documentation === undefined || value.symbol.documentation === "" ? "" : `\n\n${value.symbol.documentation}`}${value.type === "" ? "" : `\n\nType: \`${value.type}\``}\n\nAnalysis: **compiler${query.complete === false ? " (pre-CT; incomplete)" : ""}**` },
       range: new PositionMap(source.text).range(value.range) };
   }
   if (!(await ensureCompilerFacts(params.textDocument.uri))) return null;
@@ -865,7 +882,7 @@ connection.onHover(async (params: TextDocumentPositionParams, token): Promise<Ho
   return {
     contents: {
       kind: "markdown",
-      value: `\`${signature}\`${type}\n\nAnalysis: **${resolved.analysis.authority}**`,
+      value: `${signatureMarkdown(signature)}${resolved.symbol.documentation ? `\n\n${resolved.symbol.documentation}` : ""}${type}\n\nAnalysis: **${resolved.analysis.authority}**`,
     },
     ...(occurrence === undefined ? {} : { range: positions.range(occurrence.range) }),
   };
@@ -888,18 +905,19 @@ connection.onCompletion(async (params): Promise<CompletionItem[]> => {
   for (const symbol of completionSymbols(analysis, offset, begin)) {
     if (prefix !== "" && !symbol.name.toLocaleLowerCase().startsWith(prefix)) continue;
     const resolved = index.symbolById(symbol.id);
-    items.set(symbol.name, {
+    items.set(symbol.id, {
       label: symbol.name,
       kind: completionKind(symbol),
       detail: resolved === undefined ? symbol.detail : symbolSignature(resolved.analysis, symbol),
+      ...(symbol.documentation ? { documentation: { kind: "markdown" as const, value: symbol.documentation } } : {}),
       sortText: `0-${symbol.name}`,
     });
   }
   if (!(begin > 0 && analysis.text[begin - 1] === ".")) {
     for (const keyword of ablaKeywords) {
       if (prefix !== "" && !keyword.startsWith(prefix)) continue;
-      if (!items.has(keyword)) {
-        items.set(keyword, {
+      if (![...items.values()].some((item) => item.label === keyword)) {
+        items.set(`keyword:${keyword}`, {
           label: keyword,
           kind: CompletionItemKind.Keyword,
           sortText: `1-${keyword}`,
@@ -917,9 +935,12 @@ connection.onSignatureHelp(async (params) => {
   const offset = new PositionMap(analysis.text).offset(params.position);
   const context = callContext(analysis.text, offset);
   if (context === undefined) return null;
-  const candidates = index.symbols().filter(
+  const resolvedCall = navigationIndex(analysis.uri).resolve(analysis.uri, new PositionMap(analysis.text).position(context.nameOffset));
+  if (resolvedCall === undefined && analysis.authority === "compiler") return null;
+  if (resolvedCall !== undefined && resolvedCall.symbol.kind !== "function" && resolvedCall.symbol.kind !== "class") return null;
+  const candidates = resolvedCall === undefined ? index.symbols().filter(
     (symbol) => symbol.kind === "function" && symbol.name === context.name,
-  );
+  ) : [resolvedCall.symbol];
   if (candidates.length === 0) return null;
   return {
     activeSignature: 0,
@@ -930,6 +951,14 @@ connection.onSignatureHelp(async (params) => {
         label: resolved === undefined
           ? `${symbol.detail} ${symbol.name}`
           : symbolSignature(resolved.analysis, symbol),
+        ...(symbol.documentation ? { documentation: { kind: "markdown" as const, value: symbol.documentation } } : {}),
+        ...(symbol.parameters === undefined ? {} : {
+          parameters: symbol.parameters.map((parameter) => ({
+            label: parameter.label,
+            ...(parameter.documentation ? { documentation: { kind: "markdown" as const, value: parameter.documentation } } : {}),
+          })),
+          activeParameter: Math.min(context.activeParameter, Math.max(0, symbol.parameters.length - 1)),
+        }),
       };
     }),
   };

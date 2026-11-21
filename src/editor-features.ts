@@ -12,6 +12,7 @@ export const ablaKeywords = [
 
 export interface CallContext {
   readonly name: string;
+  readonly nameOffset: number;
   readonly activeParameter: number;
 }
 
@@ -86,14 +87,28 @@ export function callArgumentOffsets(text: string, nameEnd: number): readonly num
 }
 
 export function callContext(text: string, offset: number): CallContext | undefined {
-  let cursor = Math.min(offset, text.length) - 1;
-  let depth = 0;
-  let activeParameter = 0;
-  while (cursor >= 0) {
+  const stack: Array<{ opening: string; call?: { name: string; nameOffset: number; activeParameter: number } }> = [];
+  let cursor = 0;
+  let quoted = false;
+  let lineComment = false;
+  let blockComment = 0;
+  while (cursor < Math.min(offset, text.length)) {
     const character = text[cursor];
-    if (character === ")") depth += 1;
-    else if (character === "(") {
-      if (depth === 0) {
+    const next = text[cursor + 1];
+    if (lineComment) {
+      if (character === "\n") lineComment = false;
+    } else if (blockComment > 0) {
+      if (character === "/" && next === "*") { blockComment += 1; cursor += 1; }
+      else if (character === "*" && next === "/") { blockComment -= 1; cursor += 1; }
+    } else if (quoted) {
+      if (character === "\\") cursor += 1;
+      else if (character === '"') quoted = false;
+    } else if (character === '"') quoted = true;
+    else if (character === "/" && next === "/") { lineComment = true; cursor += 1; }
+    else if (character === "/" && next === "*") { blockComment = 1; cursor += 1; }
+    else if (character === "(" || character === "[" || character === "{") {
+      const group: (typeof stack)[number] = { opening: character };
+      if (character === "(") {
         let nameEnd = cursor;
         while (nameEnd > 0 && /\s/.test(text[nameEnd - 1] ?? "")) nameEnd -= 1;
         let nameBegin = nameEnd;
@@ -102,15 +117,20 @@ export function callContext(text: string, offset: number): CallContext | undefin
         }
         const qualified = text.slice(nameBegin, nameEnd);
         const name = qualified.slice(qualified.lastIndexOf(".") + 1);
-        return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
-          ? { name, activeParameter }
-          : undefined;
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !["if", "while", "for", "when"].includes(name)) {
+          group.call = { name, nameOffset: nameEnd - name.length, activeParameter: 0 };
+        }
       }
-      depth -= 1;
-    } else if (character === "," && depth === 0) activeParameter += 1;
-    cursor -= 1;
+      stack.push(group);
+    } else if (character === ")" || character === "]" || character === "}") {
+      stack.pop();
+    } else if (character === ",") {
+      const call = stack.at(-1)?.call;
+      if (call !== undefined) call.activeParameter += 1;
+    }
+    cursor += 1;
   }
-  return undefined;
+  return stack.findLast((group) => group.call !== undefined)?.call;
 }
 
 /** `text` without its comments (each becomes one blank), leaving string literals alone: a signature shows a declaration, not what is written inside it. */
@@ -148,6 +168,7 @@ function withoutComments(text: string): string {
 }
 
 export function symbolSignature(analysis: DocumentAnalysis, symbol: AblaSymbol): string {
+  if (symbol.signature !== undefined) return symbol.signature;
   const raw = withoutComments(analysis.text.slice(symbol.range.start, symbol.range.end));
   let end = raw.length;
   let groups = 0;
@@ -161,6 +182,12 @@ export function symbolSignature(analysis: DocumentAnalysis, symbol: AblaSymbol):
     }
   }
   return raw.slice(0, end).trim().replace(/\s+/g, " ");
+}
+
+/** Keep multiline source and literal backticks intact when presenting a signature. */
+export function signatureMarkdown(signature: string): string {
+  const fence = "`".repeat(Math.max(3, ...[...signature.matchAll(/`+/gu)].map((match) => match[0].length + 1)));
+  return `${fence}abla\n${signature}\n${fence}`;
 }
 
 export function foldingRanges(text: string): FoldingRange[] {

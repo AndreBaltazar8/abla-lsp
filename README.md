@@ -14,6 +14,14 @@ safe whitespace formatting, import organization, and import links. If the
 compiler is unavailable it restarts with bounded backoff and keeps a clearly
 labelled, conservative syntax mode available.
 
+With a compiler that exports documentation metadata, hover shows the exact
+source signature and doc comment, including imported standard-library symbols.
+Completion items include doc comments, and signature help uses the compiler's
+resolved call with individual parameter labels and documentation. Document a
+parameter with an adjacent `/** ... */` comment or `//` comment lines before
+its declaration. Older graph compilers retain signature help without parameter
+documentation.
+
 The transactional refactoring layer includes:
 
 - normal and multi-cursor bulk rename use canonical compiler identities and

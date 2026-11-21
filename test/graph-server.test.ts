@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
+import type { CompletionItem, Hover, SignatureHelp } from "vscode-languageserver/node";
+import { PositionMap } from "../src/positions.js";
 type Message = { id?:number; method?:string; result?:unknown; error?:{message:string}; params?:unknown };
 class Server {
  readonly child=spawn(process.execPath,['dist/src/main.js','--stdio'],{stdio:['pipe','pipe','pipe']});
@@ -65,6 +67,85 @@ test('unrelated initialization errors are visible and never silently downgrade',
  assert.deepEqual((await trace(log)).filter(m=>m.method==='initialize').map(m=>m.params.analysisMode),['graph-v2']);
 });
 const real=process.env.ABLA_COMPILER_GRAPH;
+
+async function documentationFixture(context: { after(fn: () => Promise<void>): void }) {
+ const f=await fixture();
+ const signature='fun decorate(\n    /** The text to display, café 😀. */\n    text: string,\n    /** How many copies to display. */\n    count: int = 1\n): string';
+ const text='import "abla/math"\nimport "other.ab" as other\n\n/** Decorate a display label. */\n'+signature+' = text\n\nfun main: int {\n    val label = decorate("comma,(", 2)\n    val otherLabel = other.decorate(3)\n    val rounded = roundEven(2.5)\n    label.size\n}\n';
+ await fs.writeFile(f.file,text);
+ await fs.writeFile(path.join(f.root,'other.ab'),'/** A different decoration. */\nfun decorate(\n    /** A numeric label. */\n    number: int\n): string = "other"\n');
+ const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
+ await server.start(f.root,{path:real??'ablac'});
+ server.notify('textDocument/didOpen',{textDocument:{uri:f.uri,languageId:'abla',version:1,text}});
+ const params=(offset:number)=>({textDocument:{uri:f.uri},position:new PositionMap(text).position(offset)});
+ return {...f,text,signature,server,params};
+}
+
+test('real graph LSP documentation: hover preserves exact local and stdlib signatures',{
+ skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000,
+},async context=>{
+ const f=await documentationFixture(context);
+ const local=await f.server.request('textDocument/hover',f.params(f.text.indexOf('decorate("')+2));
+ assert.equal(local.error,undefined);
+ const contents=(local.result as Hover).contents as {value:string};
+ assert.ok(contents.value.includes('```abla\n'+f.signature+'\n```'),contents.value);
+ assert.match(contents.value,/Decorate a display label\./);
+ assert.doesNotMatch(contents.value,/A different decoration/);
+ const standard=await f.server.request('textDocument/hover',f.params(f.text.indexOf('roundEven(')+2));
+ assert.equal(standard.error,undefined);
+ const markdown=((standard.result as Hover).contents as {value:string}).value;
+ assert.match(markdown,/fun roundEven\(value: f64\): f64/);
+ assert.match(markdown,/Round half to even/);
+});
+
+test('real graph LSP documentation: completion carries local and stdlib doc comments',{
+ skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000,
+},async context=>{
+ const f=await documentationFixture(context);
+ for(const [name,doc] of [['decorate','Decorate a display label.'],['roundEven','Round half to even']] as const){
+  const reply=await f.server.request('textDocument/completion',f.params(f.text.indexOf(name+'(')+3));
+  assert.equal(reply.error,undefined);
+  const item=(reply.result as CompletionItem[]).find(item=>item.label===name);
+  assert.ok(item,'missing completion '+name);
+  assert.ok((JSON.stringify(item.documentation)??'').includes(doc),JSON.stringify(item));
+  assert.ok(item.detail?.startsWith('fun '+name+'('),JSON.stringify(item));
+  if(name==='roundEven')assert.equal((reply.result as CompletionItem[]).filter(item=>item.label===name).length,2,'both f32 and f64 overloads remain available');
+ }
+ const qualified=await f.server.request('textDocument/completion',f.params(f.text.indexOf('other.decorate(')+'other.dec'.length));
+ assert.equal(qualified.error,undefined);
+ const imported=(qualified.result as CompletionItem[]).find(item=>item.label==='decorate');
+ assert.match(JSON.stringify(imported?.documentation)??'',/A different decoration/);
+});
+
+test('real graph LSP documentation: signature help uses call identity and parameter comments',{
+ skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000,
+},async context=>{
+ const f=await documentationFixture(context);
+ const reply=await f.server.request('textDocument/signatureHelp',f.params(f.text.indexOf('decorate("')+'decorate("comma,(", '.length));
+ assert.equal(reply.error,undefined);
+ const help=reply.result as SignatureHelp;
+ assert.equal(help.activeParameter,1);
+ assert.equal(help.signatures.length,1);
+ const signature=help.signatures[0];
+ assert.equal(signature?.label,f.signature);
+ assert.match(JSON.stringify(signature?.documentation),/Decorate a display label/);
+ assert.deepEqual(signature?.parameters?.map(p=>p.label),['text: string','count: int = 1']);
+ assert.match(JSON.stringify(signature?.parameters?.[0]?.documentation),/The text to display, café 😀\./);
+ assert.match(JSON.stringify(signature?.parameters?.[1]?.documentation),/How many copies to display\./);
+ const other=await f.server.request('textDocument/signatureHelp',f.params(f.text.indexOf('other.decorate(3')+'other.decorate('.length));
+ assert.equal(other.error,undefined);
+ const imported=(other.result as SignatureHelp).signatures[0];
+ assert.match(JSON.stringify(imported?.documentation),/A different decoration/);
+ assert.match(JSON.stringify(imported?.parameters?.[0]?.documentation),/A numeric label/);
+ assert.deepEqual(imported?.parameters?.map(p=>p.label),['number: int']);
+ const standard=await f.server.request('textDocument/signatureHelp',f.params(f.text.indexOf('roundEven(')+'roundEven('.length));
+ assert.equal(standard.error,undefined);
+ const math=(standard.result as SignatureHelp).signatures[0];
+ assert.equal(math?.label,'fun roundEven(value: f64): f64');
+ assert.match(JSON.stringify(math?.documentation),/Round half to even/);
+ assert.deepEqual(math?.parameters?.map(p=>p.label),['value: f64']);
+});
+
 test('real master compiler through LSP: graph queries and incomplete refactor refusal',{skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000},async context=>{
  const f=await fixture();const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
  await server.start(f.root,{path:real??'ablac'});server.notify('textDocument/didOpen',{textDocument:{uri:f.uri,languageId:'abla',version:1,text:f.text}});
