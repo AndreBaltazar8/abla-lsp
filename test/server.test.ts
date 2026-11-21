@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -589,6 +589,12 @@ test("a real compiler's four unused warnings are greyed out and each has a worki
   skip: realCompiler === undefined ? "set ABLA_COMPILER_GRAPH to a current ablac with --warn-unused-declarations" : false,
   timeout: 240_000,
 }, async (context) => {
+  const help = spawnSync(realCompiler ?? "ablac", ["--help"], { encoding: "utf8", timeout: 15_000 });
+  assert.ifError(help.error);
+  if (!`${help.stdout}${help.stderr}`.includes("--warn-unused-declarations")) {
+    context.skip("compiler does not support --warn-unused-declarations");
+    return;
+  }
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-unused-"));
   context.after(async () => fs.rm(root, { recursive: true, force: true }));
   const main = path.join(root, "main.ab");
