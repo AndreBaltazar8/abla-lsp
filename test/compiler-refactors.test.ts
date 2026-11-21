@@ -40,7 +40,8 @@ test("advanced refactors pass the real compiler prospective validator", {
   const uri = pathToFileURL(path.join(root, "refactor.ab")).href;
   const client = new CompilerClient({ executable: compiler ?? "ablac" });
   context.after(async () => client.stop().catch(() => undefined));
-  await client.start({ workspaceRoots: [root], clientName: "abla-lsp-tests", clientVersion: "0.4.0" });
+  await client.start({ workspaceRoots: [root], clientName: "abla-lsp-tests", clientVersion: "0.4.0",
+    analysisMode: "graph-v2", entryPoints: [path.join(root, "refactor.ab")] });
   const snapshot = await client.analyze();
   const index = new WorkspaceIndex(new SyntaxAnalyzer());
   for (const document of snapshot.documents) {
