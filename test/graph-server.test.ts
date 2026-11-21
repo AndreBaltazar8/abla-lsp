@@ -4,9 +4,10 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import type { CompletionItem, Hover, SignatureHelp } from "vscode-languageserver/node";
 import { PositionMap } from "../src/positions.js";
+import { CompilerClient } from "../src/compiler-client.js";
 type Message = { id?:number; method?:string; result?:unknown; error?:{message:string}; params?:unknown };
 class Server {
  readonly child=spawn(process.execPath,['dist/src/main.js','--stdio'],{stdio:['pipe','pipe','pipe']});
@@ -68,13 +69,30 @@ test('unrelated initialization errors are visible and never silently downgrade',
 });
 const real=process.env.ABLA_COMPILER_GRAPH;
 
-async function documentationFixture(context: { after(fn: () => Promise<void>): void }) {
+let documentationFields: Promise<ReadonlySet<string>> | undefined;
+async function documentationFixture(context: TestContext, required: 'signature'|'documentation'|'parameters') {
  const f=await fixture();
  const signature='fun decorate(\n    /** The text to display, café 😀. */\n    text: string,\n    /** How many copies to display. */\n    count: int = 1\n): string';
  const text='import "abla/math"\nimport "other.ab" as other\n\n/** Decorate a display label. */\n'+signature+' = text\n\nfun main: int {\n    val label = decorate("comma,(", 2)\n    val otherLabel = other.decorate(3)\n    val rounded = roundEven(2.5)\n    label.size\n}\n';
  await fs.writeFile(f.file,text);
  await fs.writeFile(path.join(f.root,'other.ab'),'/** A different decoration. */\nfun decorate(\n    /** A numeric label. */\n    number: int\n): string = "other"\n');
- const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
+ context.after(async()=>{await fs.rm(f.root,{recursive:true,force:true});});
+ // Probe the compiler independently of the LSP: an LSP regression must not turn an assertion into a skip.
+ documentationFields??=(async()=>{
+  const compiler=new CompilerClient({executable:real??'ablac'});
+  try{
+   await compiler.start({workspaceRoots:[f.root],clientName:'documentation-feature-test',clientVersion:'0',analysisMode:'graph-v1',entryPoints:[f.file]});
+   const snapshot=await compiler.analyze({fields:['symbols']});
+   const symbol=snapshot.documents.find(doc=>doc.uri===f.uri)?.symbols.find(symbol=>symbol.name==='decorate');
+   assert.ok(symbol,'compiler did not analyze the documentation fixture');
+   return new Set(Object.keys(symbol));
+  }finally{await compiler.stop();}
+ })();
+ if(!(await documentationFields).has(required)){
+  context.skip('compiler does not export symbol.'+required);
+  return undefined;
+ }
+ const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);});
  await server.start(f.root,{path:real??'ablac'});
  server.notify('textDocument/didOpen',{textDocument:{uri:f.uri,languageId:'abla',version:1,text}});
  const params=(offset:number)=>({textDocument:{uri:f.uri},position:new PositionMap(text).position(offset)});
@@ -84,7 +102,7 @@ async function documentationFixture(context: { after(fn: () => Promise<void>): v
 test('real graph LSP documentation: hover preserves exact local and stdlib signatures',{
  skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000,
 },async context=>{
- const f=await documentationFixture(context);
+ const f=await documentationFixture(context,'signature');if(f===undefined)return;
  const local=await f.server.request('textDocument/hover',f.params(f.text.indexOf('decorate("')+2));
  assert.equal(local.error,undefined);
  const contents=(local.result as Hover).contents as {value:string};
@@ -101,7 +119,7 @@ test('real graph LSP documentation: hover preserves exact local and stdlib signa
 test('real graph LSP documentation: completion carries local and stdlib doc comments',{
  skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000,
 },async context=>{
- const f=await documentationFixture(context);
+ const f=await documentationFixture(context,'documentation');if(f===undefined)return;
  for(const [name,doc] of [['decorate','Decorate a display label.'],['roundEven','Round half to even']] as const){
   const reply=await f.server.request('textDocument/completion',f.params(f.text.indexOf(name+'(')+3));
   assert.equal(reply.error,undefined);
@@ -120,7 +138,7 @@ test('real graph LSP documentation: completion carries local and stdlib doc comm
 test('real graph LSP documentation: signature help uses call identity and parameter comments',{
  skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000,
 },async context=>{
- const f=await documentationFixture(context);
+ const f=await documentationFixture(context,'parameters');if(f===undefined)return;
  const reply=await f.server.request('textDocument/signatureHelp',f.params(f.text.indexOf('decorate("')+'decorate("comma,(", '.length));
  assert.equal(reply.error,undefined);
  const help=reply.result as SignatureHelp;
