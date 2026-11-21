@@ -18,7 +18,10 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:abla"
+    "onLanguage:abla",
+    "onDebugResolve:abla",
+    "onDebugInitialConfigurations",
+    "onDebugDynamicConfigurations:abla"
   ],
   "main": "./dist/extension.cjs",
   "extensionDependencies": [
@@ -36,6 +39,86 @@
     "package": "npm test && vsce package --no-dependencies"
   },
   "contributes": {
+    "breakpoints": [
+      {
+        "language": "abla"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "abla",
+        "label": "Abla",
+        "languages": [
+          "abla"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The .ab file to debug, or a project directory (abla.toml). It is built with `ablac build -g --fast` first.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments for the program.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The directory the build and the program run in (default: the workspace folder)."
+              },
+              "output": {
+                "type": "string",
+                "description": "Where the debug build is written (default: build/debug/<name> in cwd)."
+              },
+              "env": {
+                "type": "object",
+                "description": "Environment variables for the program."
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the program's entry.",
+                "default": false
+              },
+              "initCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "More lldb commands to run first (after the Abla summaries)."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "abla",
+            "request": "launch",
+            "name": "Debug Abla program",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Abla: Launch",
+            "description": "Build with debug information and run under lldb-dap.",
+            "body": {
+              "type": "abla",
+              "request": "launch",
+              "name": "Debug Abla program",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "abla.moveDeclarations",

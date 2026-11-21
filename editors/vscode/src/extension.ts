@@ -6,6 +6,7 @@ import {
   type LanguageClientOptions,
   type ServerOptions,
 } from "vscode-languageclient/node";
+import { registerDebugging } from "./debug";
 
 let client: LanguageClient | undefined;
 
@@ -336,6 +337,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     synchronize: { configurationSection: "abla", fileEvents },
   };
   client = new LanguageClient("abla", "Abla Language Server", serverOptions, clientOptions);
+  registerDebugging(context);
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
     if (event.affectsConfiguration("abla.compiler.jsonConstruction")) {
       void client?.restart();
