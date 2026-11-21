@@ -433,12 +433,13 @@ async function startCompiler(): Promise<void> {
   try {
     const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports, unusedLocals: compilerConfiguration.unusedLocals, unusedParameters: compilerConfiguration.unusedParameters, unusedDeclarations: compilerConfiguration.unusedDeclarations };
     let initialized;
-    // The newest analysis mode the compiler has: graph-v2 (stable declaration ids, analyze with since), else graph-v1, else the legacy schema 1.
-    for (const mode of ["graph-v2", "graph-v1", undefined] as const) {
-      try { initialized = await candidate.start(mode === undefined ? initialize : { ...initialize, analysisMode: mode }); break; }
+    // The newest analysis mode the compiler has: graph-v2 (stable declaration ids, analyze with since), else graph-v1. The compiler's
+    // non-graph analysis (schema 1) is gone from current compilers (#832), so a compiler that refuses graph-v1 is not usable.
+    for (const mode of ["graph-v2", "graph-v1"] as const) {
+      try { initialized = await candidate.start({ ...initialize, analysisMode: mode }); break; }
       catch (error) {
-        if (!(error instanceof CompilerProtocolError) || error.code !== "unsupported_analysis_mode" || mode === undefined) throw error;
-        connection.console.info(`compiler rejects ${mode}; reconnecting with ${mode === "graph-v2" ? "graph-v1" : "legacy schema 1"}`);
+        if (!(error instanceof CompilerProtocolError) || error.code !== "unsupported_analysis_mode" || mode === "graph-v1") throw error;
+        connection.console.info(`compiler rejects ${mode}; reconnecting with graph-v1`);
         await candidate.stop().catch(() => undefined); candidate = createClient();
       }
     }
@@ -450,7 +451,7 @@ async function startCompiler(): Promise<void> {
       log: (message) => connection.console.warn(`compiler analysis failed: ${message}`),
     });
     compiler = candidate; compilerWorkspace = workspace; compilerRestartAttempt = 0;
-    connection.console.info(`connected to ablac ${initialized.compilerVersion} analysis protocol 1 (${workspace.graph ? `${workspace.stableIds ? "graph-v2" : "graph-v1"}, no CT evaluation` : "legacy"})`);
+    connection.console.info(`connected to ablac ${initialized.compilerVersion} analysis protocol 1 (${workspace.stableIds ? "graph-v2" : "graph-v1"})`);
     for (const document of documents.all()) await workspace.update("open", { uri: document.uri, version: document.version, text: document.getText() });
     workspace.schedule(0);
   } catch (error) {

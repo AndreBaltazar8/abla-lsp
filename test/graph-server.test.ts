@@ -30,7 +30,7 @@ class Server {
 }
 async function fixture(){const root=await fs.mkdtemp(path.join(os.tmpdir(),'abla-lsp-server-'));const file=path.join(root,'main.ab');const text='// café 😀\nfun target(): int = 42\nfun main: int = target()\n';await fs.writeFile(path.join(root,'abla.toml'),'name = "lsp-test"\nentry = "main.ab"\n');await fs.writeFile(file,text);return{root,file,uri:pathToFileURL(file).href,text};}
 async function trace(file:string):Promise<Array<{method:string;params:Record<string,unknown>;pid:number}>> {return (await fs.readFile(file,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));}
-for(const mode of ['ignore','reject','graph-no-queries','graph'])test(`LSP compiler negotiation and navigation: ${mode}`,{timeout:30000},async context=>{
+for(const mode of ['ignore','graph-no-queries','graph'])test(`LSP compiler negotiation and navigation: ${mode}`,{timeout:30000},async context=>{
  const f=await fixture();const log=path.join(f.root,'trace');const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
  await server.start(f.root,{path:process.execPath,arguments:[path.resolve('test/fixtures/fake-graph-ablac.mjs'),mode,log]});
  server.notify('textDocument/didOpen',{textDocument:{uri:f.uri,languageId:'abla',version:1,text:f.text}});
@@ -43,9 +43,6 @@ for(const mode of ['ignore','reject','graph-no-queries','graph'])test(`LSP compi
   assert.ok(before.some(m=>m.method==='query/definition'));assert.ok(before.some(m=>m.method==='query/hover'));assert.ok(before.some(m=>m.method==='query/references'));
   assert.ok(before.filter(m=>m.method==='analyze').every(m=>Array.isArray(m.params.fields)),'navigation forced an occurrence dump');
  }else assert.ok(!before.some(m=>m.method.startsWith('query/')));
- if(mode==='reject'){
-  const init=before.filter(m=>m.method==='initialize');assert.deepEqual(init.map(m=>m.params.analysisMode),['graph-v2','graph-v1',undefined]);assert.equal(new Set(init.map(m=>m.pid)).size,3);
- }
  const rename=await server.request('textDocument/rename',{textDocument:{uri:f.uri},position:{line:1,character:5},newName:'renamed'});assert.equal(rename.error,undefined,JSON.stringify(rename.error));
  if(mode==='graph')assert.ok((await trace(log)).some(m=>m.method==='analyze'&&m.params.fields===undefined),'rename did not fetch complete occurrences');
  if(mode==='graph'){
@@ -53,6 +50,13 @@ for(const mode of ['ignore','reject','graph-no-queries','graph'])test(`LSP compi
   server.notify('textDocument/didChange',{textDocument:{uri:f.uri,version:2},contentChanges:[{text:pending}]});
   const rejected=await server.request('textDocument/rename',{textDocument:{uri:f.uri},position:{line:1,character:5},newName:'next'});assert.match(rejected.error?.message??'',/incomplete/);
  }
+});
+test('a compiler without graph analysis (the non-graph mode is gone, #832) is not used: graph-v2, then graph-v1, then syntax mode',{timeout:30000},async context=>{
+ const f=await fixture();const log=path.join(f.root,'trace');const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
+ const waiting=server.wait(m=>m.method==='window/logMessage'&&String((m.params as {message?:string})?.message).includes('continuing in syntax mode'));
+ const reply=await server.request('initialize',{processId:null,rootUri:pathToFileURL(f.root).href,capabilities:{},initializationOptions:{compiler:{path:process.execPath,arguments:[path.resolve('test/fixtures/fake-graph-ablac.mjs'),'reject',log]}}});assert.equal(reply.error,undefined);server.notify('initialized',{});
+ await waiting;
+ const init=(await trace(log)).filter(m=>m.method==='initialize');assert.deepEqual(init.map(m=>m.params.analysisMode),['graph-v2','graph-v1']);
 });
 test('unrelated initialization errors are visible and never silently downgrade',{timeout:30000},async context=>{
  const f=await fixture();const log=path.join(f.root,'trace');const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
