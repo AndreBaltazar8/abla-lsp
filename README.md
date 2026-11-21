@@ -36,6 +36,22 @@ safety boundaries.
 See [graph-aware analysis](docs/compiler-graph.md) for capability negotiation,
 no-evaluation editor policy, positional queries and incomplete-refactor limits.
 
+## Unused code
+
+The compiler's warnings arrive greyed out (the `unnecessary` tag) with quick fixes. Unused imports are on
+(`compiler.unusedImports`); `compiler.unusedLocals`, `compiler.unusedParameters` and
+`compiler.unusedDeclarations` are off until set (they need an `ablac` that has the flags).
+
+| Warning | Quick fixes |
+| --- | --- |
+| `W_UNUSED_IMPORT` | Remove unused import |
+| `W_UNUSED_LOCAL` | Rename `x` to `_x`; Remove unused `x` (a call in its initializer stays: "keep its initializer") |
+| `W_UNUSED_PARAMETER` | Rename `x` to `_x`; Remove unused parameter `x` and its arguments (the signature refactoring, over every call) |
+| `W_UNUSED_DECLARATION` | Delete unused `name` (function or method, with the comment above it); a constructor field has no fix |
+
+The removals are compiler-validated like the other refactorings, and a client that supports change annotations
+shows each one for review before it applies (`needsConfirmation`).
+
 ## Development
 
 Node.js 20 or newer and Abla 0.2.46 or newer with analysis protocol version 1

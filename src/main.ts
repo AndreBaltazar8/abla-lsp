@@ -31,6 +31,7 @@ import {
   type CallHierarchyItem,
   type CallHierarchyOutgoingCall,
   type CodeAction,
+  type Diagnostic,
   type CompletionItem,
   type Hover,
   type InlayHint,
@@ -76,6 +77,7 @@ import {
   type ToggleCompileTimeRequest,
 } from "./refactors.js";
 import { SyntaxAnalyzer } from "./source.js";
+import { removeUnusedDeclaration, removeUnusedLocal, withPreview, type TextRemoval } from "./unused-fixes.js";
 import {
   applyStagedRecipe,
   type StagedRefactorOperation,
@@ -104,6 +106,8 @@ let compilerUris = new Set<string>();
 let compilerRestartTimer: ReturnType<typeof setTimeout> | undefined;
 let compilerRestartAttempt = 0;
 let shuttingDown = false;
+/** The client shows edits with annotations that need confirmation for review (LSP 3.16 change annotations). */
+let clientPreviewsEdits = false;
 
 interface InitializationOptions {
   readonly compiler?: {
@@ -304,6 +308,8 @@ function publishDiagnostics(analysis: DocumentAnalysis, pending: readonly Compil
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   const initialization = params.initializationOptions as InitializationOptions | undefined;
+  const workspaceEdits = params.capabilities.workspace?.workspaceEdit;
+  clientPreviewsEdits = workspaceEdits?.documentChanges === true && workspaceEdits.changeAnnotationSupport !== undefined;
   const configured = initialization?.compiler;
   compilerConfiguration = {
     enabled: configured?.enabled ?? true,
@@ -1075,6 +1081,46 @@ function editDistance(left: string, right: string): number {
   return previous[right.length] ?? Math.max(left.length, right.length);
 }
 
+/** The removals offered for an unused local, parameter or declaration: an edit the client previews, when it can. */
+async function unusedRemovals(
+  analysis: NonNullable<ReturnType<typeof index.document>>,
+  positions: PositionMap,
+  diagnostic: Diagnostic,
+): Promise<Array<{ readonly title: string; readonly edit: WorkspaceEdit }>> {
+  const code = diagnostic.code;
+  if (code !== "W_UNUSED_LOCAL" && code !== "W_UNUSED_PARAMETER" && code !== "W_UNUSED_DECLARATION") return [];
+  const message = typeof diagnostic.message === "string" ? diagnostic.message : diagnostic.message.value;
+  const name = /`([^`]+)`/u.exec(message)?.[1]?.split(".").pop();
+  if (name === undefined) return [];
+  const start = positions.offset(diagnostic.range.start);
+  const end = positions.offset(diagnostic.range.end);
+  const preview = (edit: WorkspaceEdit, title: string): WorkspaceEdit => clientPreviewsEdits ? withPreview(edit, title) : edit;
+  const fromText = (removal: TextRemoval | undefined): Array<{ readonly title: string; readonly edit: WorkspaceEdit }> => {
+    if (removal === undefined) return [];
+    const edit: WorkspaceEdit = { changes: { [analysis.uri]: [{ range: positions.range({ start: removal.start, end: removal.end }), newText: removal.newText }] } };
+    return [{ title: removal.title, edit: preview(edit, removal.title) }];
+  };
+  if (code === "W_UNUSED_LOCAL") return fromText(removeUnusedLocal(analysis.text, start, name));
+  if (code === "W_UNUSED_DECLARATION") {
+    if (/: (?:field|parameter) `/u.test(message)) return [];
+    return fromText(removeUnusedDeclaration(analysis.text, start, end, name));
+  }
+  // A parameter goes with the argument at every call: the signature refactoring, over the compiler's graph.
+  const parameter = index.symbols().find((symbol) =>
+    symbol.kind === "parameter" && symbol.uri === analysis.uri && symbol.selectionRange.start <= start && end <= symbol.selectionRange.end);
+  if (parameter?.containerId === undefined) return [];
+  const siblings = index.symbols()
+    .filter((symbol) => symbol.kind === "parameter" && symbol.containerId === parameter.containerId)
+    .sort((left, right) => left.range.start - right.range.start);
+  const result = advancedRefactors.changeSignature({
+    symbolId: parameter.containerId,
+    parameters: siblings.filter((symbol) => symbol.id !== parameter.id).map((symbol) => ({ name: symbol.name, source: symbol.name })),
+  });
+  if (!result.ok) return [];
+  const title = `Remove unused parameter \`${name}\` and its arguments`;
+  return [{ title, edit: preview(result.edit, title) }];
+}
+
 connection.onCodeAction(async (params) => {
   if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
   const semanticActions = compilerWorkspace?.graph !== true || compilerSnapshot?.complete === true;
@@ -1101,6 +1147,15 @@ connection.onCodeAction(async (params) => {
           isPreferred: given.length === 1,
           edit: { changes: { [analysis.uri]: fix.edits.map((edit) => ({ range: edit.range, newText: edit.newText })) } },
         });
+      }
+      // The unused-code warnings also get a removal (the compiler's own fix is the import's, or the rename to `_x`).
+      for (const removal of await unusedRemovals(analysis, positions, diagnostic)) {
+        try {
+          await validateCompilerEdit(removal.edit);
+          actions.push({ title: removal.title, kind: CodeActionKind.QuickFix, diagnostics: [diagnostic], edit: removal.edit });
+        } catch {
+          // A removal is shown only after compiler validation.
+        }
       }
       // Only a diagnostic without fixes of the compiler's gets the editor's own spelling guess (an older compiler).
       if (given.length > 0 || diagnostic.code !== "E_SEMANTIC") continue;

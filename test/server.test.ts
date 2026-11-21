@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 interface RpcMessage {
@@ -48,6 +51,7 @@ class LspClient {
   waitForNotification(
     method: string,
     matches: (params: unknown) => boolean,
+    timeoutMs = 2_000,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const waiter = { matches, resolve };
@@ -61,7 +65,7 @@ class LspClient {
           pending.splice(index, 1);
           reject(new Error(`timed out waiting for ${method}`));
         }
-      }, 2_000).unref();
+      }, timeoutMs).unref();
     });
   }
 
@@ -265,7 +269,7 @@ test("compiler snapshots drive type definitions", async (context) => {
   await client.request("initialize", {
     processId: process.pid,
     rootUri: null,
-    capabilities: {},
+    capabilities: { workspace: { workspaceEdit: { documentChanges: true, changeAnnotationSupport: { groupsOnLabel: true } } } },
     initializationOptions: {
       compiler: {
         enabled: true,
@@ -350,9 +354,9 @@ test("compiler snapshots drive type definitions", async (context) => {
     context: { diagnostics: published.diagnostics, only: ["quickfix"] },
   });
   const fixes = quickFixes.result as Array<{
-    edit: { changes: Record<string, Array<{ newText: string }>> };
+    edit: { changes?: Record<string, Array<{ newText: string }>> };
   }>;
-  assert.ok(fixes.some((action) => action.edit.changes[uri]?.[0]?.newText === "build"));
+  assert.ok(fixes.some((action) => action.edit.changes?.[uri]?.[0]?.newText === "build"));
   // The compiler's own fix arrives as edits in the diagnostic's data and becomes an action with the compiler's title and edit;
   // its help lines are under the message.
   const warned = published.diagnostics.find((diagnostic) => diagnostic.code === "W_UNUSED_IMPORT") as { severity: number; tags?: number[] } | undefined;
@@ -361,13 +365,21 @@ test("compiler snapshots drive type definitions", async (context) => {
   assert.ok(fixes.some((action) => (action as { title?: string }).title === "Remove unused import"));
   assert.ok(fixes.some((action) => (action as { title?: string }).title === "Rename `dead` to `_dead`"), "the unused local's rename");
   assert.ok(fixes.some((action) => (action as { title?: string }).title === "Rename `ignored` to `_ignored`"), "the unused parameter's rename");
+  const titled = (title: string) => fixes.find((action) => (action as { title?: string }).title === title) as { edit: { changes?: Record<string, Array<{ range: unknown; newText: string }>>; documentChanges?: Array<{ edits: Array<{ newText: string; annotationId?: string }> }>; changeAnnotations?: Record<string, { needsConfirmation?: boolean }> } } | undefined;
+  assert.ok(titled("Remove unused `dead`"), "the unused local's removal");
+  assert.ok(titled("Delete unused `neverCalled`"), "the unused declaration's removal");
+  assert.ok(titled("Remove unused parameter `ignored` and its arguments"), "the unused parameter's removal, calls included");
+  assert.equal(titled("Delete unused `neverCalled`")?.edit.changes, undefined, "the removal is a documentChanges edit with an annotation");
+  const preview = titled("Delete unused `neverCalled`")?.edit;
+  assert.ok(preview?.documentChanges?.[0]?.edits.every((edit) => edit.newText === "" && edit.annotationId !== undefined));
+  assert.equal(Object.values(preview?.changeAnnotations ?? {})[0]?.needsConfirmation, true, "the client shows it for review");
   const unusedDeclaration = published.diagnostics.find((diagnostic) => diagnostic.code === "W_UNUSED_DECLARATION") as { severity: number; tags?: number[] } | undefined;
   assert.equal(unusedDeclaration?.severity, 2, "a warning");
   assert.deepEqual(unusedDeclaration?.tags, [1], "greyed out");
   const missingImport = published.diagnostics.find((diagnostic) => diagnostic.message.startsWith("error[E_SEMANTIC]: call.target:usesIo"));
   assert.ok(missingImport?.message.includes("\nhelp: `usesIo` is declared in abla/io"), "the help lines follow the message");
   const importFix = fixes.find((action) => (action as { title?: string }).title === "Add import \"abla/io\"");
-  assert.deepEqual(importFix?.edit.changes[uri], [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: "import \"abla/io\"\n" }]);
+  assert.deepEqual(importFix?.edit.changes?.[uri], [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: "import \"abla/io\"\n" }]);
 });
 
 test("execute-command refactors are compiler validated and applied as workspace edits", async (context) => {
@@ -570,4 +582,111 @@ test("execute-command refactors are compiler validated and applied as workspace 
     (change) => "kind" in change && change.kind === "create" && change.uri === targetUri,
   ));
   assert.match(editText(staged), /fun next/u);
+});
+
+const realCompiler = process.env.ABLA_COMPILER_GRAPH;
+test("a real compiler's four unused warnings are greyed out and each has a working fix", {
+  skip: realCompiler === undefined ? "set ABLA_COMPILER_GRAPH to a current ablac with --warn-unused-declarations" : false,
+  timeout: 240_000,
+}, async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-unused-"));
+  context.after(async () => fs.rm(root, { recursive: true, force: true }));
+  const main = path.join(root, "main.ab");
+  const text = [
+    'import "abla/text"',
+    "",
+    "fun used(a: int, spare: int): int {",
+    "    val dead = a + 1",
+    "    val side = compute()",
+    "    a",
+    "}",
+    "",
+    "/** Nothing calls this. */",
+    "fun neverCalled(x: int): int = x + 1",
+    "",
+    "private fun compute(): int = 4",
+    "",
+    "fun main: int = used(2, 3)",
+    "",
+  ].join("\n");
+  await fs.writeFile(main, text);
+  const uri = pathToFileURL(main).href;
+  const client = new LspClient();
+  context.after(async () => client.stop().catch(() => undefined));
+  await client.request("initialize", {
+    processId: process.pid,
+    rootUri: pathToFileURL(root).href,
+    workspaceFolders: [{ uri: pathToFileURL(root).href, name: "unused" }],
+    capabilities: { workspace: { workspaceEdit: { documentChanges: true, changeAnnotationSupport: { groupsOnLabel: true } } } },
+    initializationOptions: { compiler: { enabled: true, path: realCompiler, unusedImports: true, unusedLocals: true, unusedParameters: true, unusedDeclarations: true } },
+  });
+  client.notify("initialized", {});
+  type Published = { uri: string; diagnostics: Array<{ code?: string; tags?: number[]; severity?: number; range: unknown; data?: unknown }> };
+  const codes = ["W_UNUSED_IMPORT", "W_UNUSED_LOCAL", "W_UNUSED_PARAMETER", "W_UNUSED_DECLARATION"];
+  const waiting = client.waitForNotification("textDocument/publishDiagnostics", (params) => {
+    const published = params as Published;
+    return published.uri === uri && codes.every((code) => published.diagnostics.some((diagnostic) => diagnostic.code === code));
+  }, 180_000);
+  client.notify("textDocument/didOpen", { textDocument: { uri, languageId: "abla", version: 1, text } });
+  const published = await waiting as Published;
+  for (const code of codes) {
+    const warnings = published.diagnostics.filter((diagnostic) => diagnostic.code === code);
+    assert.ok(warnings.length > 0, code);
+    for (const warning of warnings) {
+      assert.equal(warning.severity, 2, `${code} is a warning`);
+      assert.deepEqual(warning.tags, [1], `${code} is greyed out`);
+    }
+  }
+  const response = await client.request("textDocument/codeAction", {
+    textDocument: { uri },
+    range: { start: { line: 0, character: 0 }, end: { line: 14, character: 0 } },
+    context: { diagnostics: published.diagnostics, only: ["quickfix"] },
+  });
+  type Action = { title: string; edit: { documentChanges?: Array<{ edits: Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string; annotationId?: string }> }>; changes?: Record<string, Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }>>; changeAnnotations?: Record<string, { needsConfirmation?: boolean }> } };
+  const actions = response.result as Action[];
+  const titles = actions.map((action) => action.title);
+  const wanted = [
+    "Remove unused import",
+    "Rename `dead` to `_dead`", "Remove unused `dead`",
+    "Rename `side` to `_side`", "Remove unused `side`, keep its initializer",
+    "Rename `spare` to `_spare`", "Remove unused parameter `spare` and its arguments",
+    "Delete unused `neverCalled`",
+  ];
+  for (const title of wanted) assert.ok(titles.includes(title), `${title} is offered (got ${titles.join(" | ")})`);
+  // The removals are previewed by clients that can; each edit carries the annotation that needs confirmation.
+  for (const title of wanted.filter((candidate) => candidate.startsWith("Remove unused `") || candidate.startsWith("Delete") || candidate.includes("parameter"))) {
+    const action = actions.find((candidate) => candidate.title === title);
+    assert.ok(action?.edit.documentChanges?.every((change) => change.edits.every((edit) => edit.annotationId !== undefined)), `${title} carries its annotation`);
+    assert.ok(Object.values(action?.edit.changeAnnotations ?? {}).every((annotation) => annotation.needsConfirmation === true));
+  }
+  // Apply the removals together and the warnings are gone.
+  const lines = text.split("\n");
+  const offsetOf = (position: { line: number; character: number }): number => lines.slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) + position.character;
+  const edits = wanted.filter((title) => title !== "Rename `dead` to `_dead`" && !title.startsWith("Rename"))
+    .flatMap((title) => {
+      const action = actions.find((candidate) => candidate.title === title);
+      return (action?.edit.documentChanges ?? []).flatMap((change) => change.edits).concat(Object.values(action?.edit.changes ?? {}).flat() as never[]);
+    })
+    .map((edit) => ({ start: offsetOf(edit.range.start), end: offsetOf(edit.range.end), newText: edit.newText }))
+    .sort((left, right) => right.start - left.start);
+  let fixed = text;
+  for (const edit of edits) fixed = fixed.slice(0, edit.start) + edit.newText + fixed.slice(edit.end);
+  assert.equal(fixed, [
+    "",
+    "fun used(a: int): int {",
+    "    compute()",
+    "    a",
+    "}",
+    "",
+    "private fun compute(): int = 4",
+    "",
+    "fun main: int = used(2)",
+    "",
+  ].join("\n"));
+  const clean = client.waitForNotification("textDocument/publishDiagnostics", (params) => {
+    const next = params as Published;
+    return next.uri === uri && !next.diagnostics.some((diagnostic) => diagnostic.code?.startsWith("W_UNUSED") === true);
+  }, 180_000);
+  client.notify("textDocument/didChange", { textDocument: { uri, version: 2 }, contentChanges: [{ text: fixed }] });
+  await clean;
 });

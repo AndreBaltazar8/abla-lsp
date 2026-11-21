@@ -109,6 +109,24 @@ input.on("line", (line) => {
                 declarationId: buildId, type: "int",
               });
             }
+            const area = document.text.indexOf("fun area(ignored");
+            if (area >= 0) {
+              const areaId = `${document.uri}#area`;
+              const lineEnd = document.text.indexOf("\n", area);
+              const ignored = document.text.indexOf("ignored", area);
+              symbols.push({
+                id: areaId, name: "area", kind: "function",
+                uri: document.uri, range: { start: area, end: lineEnd },
+                selectionRange: { start: area + 4, end: area + 8 },
+                detail: "fun int", topLevel: true,
+              });
+              symbols.push({
+                id: `${areaId}#ignored`, name: "ignored", kind: "parameter",
+                uri: document.uri, range: { start: ignored, end: ignored + 12 },
+                selectionRange: { start: ignored, end: ignored + 7 },
+                detail: "parameter", topLevel: false, containerId: areaId,
+              });
+            }
             const misspelled = document.text.indexOf("buidl");
             return {
               ...document,
@@ -116,7 +134,7 @@ input.on("line", (line) => {
               occurrences,
               diagnostics: [...(unusedDeclarations && document.text.indexOf("fun neverCalled") >= 0 ? [{
                 code: "W_UNUSED_DECLARATION", message: "warning[W_UNUSED_DECLARATION]: x.ab: function `neverCalled` is never used",
-                range: { start: document.text.indexOf("fun neverCalled"), end: document.text.indexOf("fun neverCalled") + 20 },
+                range: { start: document.text.indexOf("fun neverCalled"), end: document.text.indexOf("\n", document.text.indexOf("fun neverCalled")) },
                 severity: "warning", tags: ["unnecessary"],
               }] : []), ...(unusedParameters && document.text.indexOf("(ignored") >= 0 ? [{
                 code: "W_UNUSED_PARAMETER", message: "warning[W_UNUSED_PARAMETER]: x.ab: parameter `ignored` is never used",
