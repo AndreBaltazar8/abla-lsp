@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 let unusedImports = false;
 let unusedLocals = false;
 let unusedParameters = false;
+let unusedDeclarations = false;
 const cancelled = new Set();
 const documents = new Map();
 const input = createInterface({ input: process.stdin });
@@ -21,6 +22,7 @@ input.on("line", (line) => {
     unusedImports = message.params?.unusedImports === true;
     unusedLocals = message.params?.unusedLocals === true;
     unusedParameters = message.params?.unusedParameters === true;
+    unusedDeclarations = message.params?.unusedDeclarations === true;
     respond(message.id, {
       compilerVersion: "0.2.11-test",
       protocolVersion: 1,
@@ -112,7 +114,11 @@ input.on("line", (line) => {
               ...document,
               symbols,
               occurrences,
-              diagnostics: [...(unusedParameters && document.text.indexOf("(ignored") >= 0 ? [{
+              diagnostics: [...(unusedDeclarations && document.text.indexOf("fun neverCalled") >= 0 ? [{
+                code: "W_UNUSED_DECLARATION", message: "warning[W_UNUSED_DECLARATION]: x.ab: function `neverCalled` is never used",
+                range: { start: document.text.indexOf("fun neverCalled"), end: document.text.indexOf("fun neverCalled") + 20 },
+                severity: "warning", tags: ["unnecessary"],
+              }] : []), ...(unusedParameters && document.text.indexOf("(ignored") >= 0 ? [{
                 code: "W_UNUSED_PARAMETER", message: "warning[W_UNUSED_PARAMETER]: x.ab: parameter `ignored` is never used",
                 range: { start: document.text.indexOf("ignored"), end: document.text.indexOf("ignored") + 7 },
                 severity: "warning", tags: ["unnecessary"],
