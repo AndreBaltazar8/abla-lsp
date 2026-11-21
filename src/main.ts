@@ -98,7 +98,8 @@ let compilerConfiguration: {
   readonly unusedLocals: boolean;
   readonly unusedParameters: boolean;
   readonly unusedDeclarations: boolean;
-} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true, unusedLocals: false, unusedParameters: false, unusedDeclarations: false };
+  readonly jsonConstruction: boolean;
+} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true, unusedLocals: false, unusedParameters: false, unusedDeclarations: false, jsonConstruction: false };
 let compiler: CompilerClient | undefined;
 let compilerRevision: string | undefined;
 let compilerSnapshot: CompilerWorkspaceSnapshot | undefined;
@@ -123,6 +124,8 @@ interface InitializationOptions {
     readonly unusedParameters?: boolean;
     /** Grey out and warn about top-level functions and values nothing refers to (off by default while the compiler measures it). */
     readonly unusedDeclarations?: boolean;
+    /** Suggest standard JSON literals for hand-built JSON (off by default). */
+    readonly jsonConstruction?: boolean;
   };
 }
 
@@ -335,6 +338,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     unusedLocals: configured?.unusedLocals ?? false,
     unusedParameters: configured?.unusedParameters ?? false,
     unusedDeclarations: configured?.unusedDeclarations ?? false,
+    jsonConstruction: configured?.jsonConstruction ?? false,
     ...(configured?.arguments === undefined ? {} : { arguments: configured.arguments }),
   };
   const roots = params.workspaceFolders?.map((folder) => folder.uri) ??
@@ -448,7 +452,7 @@ async function startCompiler(): Promise<void> {
   };
   let candidate = createClient();
   try {
-    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports, unusedLocals: compilerConfiguration.unusedLocals, unusedParameters: compilerConfiguration.unusedParameters, unusedDeclarations: compilerConfiguration.unusedDeclarations };
+    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports, unusedLocals: compilerConfiguration.unusedLocals, unusedParameters: compilerConfiguration.unusedParameters, unusedDeclarations: compilerConfiguration.unusedDeclarations, jsonConstruction: compilerConfiguration.jsonConstruction };
     let initialized;
     // The newest analysis mode the compiler has: graph-v2 (stable declaration ids, analyze with since), else graph-v1. The compiler's
     // non-graph analysis (schema 1) is gone from current compilers (#832), so a compiler that refuses graph-v1 is not usable.

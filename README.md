@@ -49,6 +49,10 @@ no-evaluation editor policy, positional queries and incomplete-refactor limits.
 The compiler's warnings arrive greyed out (the `unnecessary` tag) with quick fixes. Unused imports are on
 (`compiler.unusedImports`); `compiler.unusedLocals`, `compiler.unusedParameters` and
 `compiler.unusedDeclarations` are off until set (they need an `ablac` that has the flags).
+`compiler.jsonConstruction` is also off by default. With a compiler supporting
+`--warn-json-construction`, it suggests `$json` or `$jsonw` for hand-built JSON
+and offers a rewrite when the compiler can preserve the result and output bytes.
+The VS Code setting is `abla.compiler.jsonConstruction`; changing it restarts the server.
 
 | Warning | Quick fixes |
 | --- | --- |

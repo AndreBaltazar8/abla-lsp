@@ -144,6 +144,11 @@
           "default": true,
           "description": "Use compiler-backed semantic analysis and validated refactoring."
         },
+        "abla.compiler.jsonConstruction": {
+          "type": "boolean",
+          "default": false,
+          "description": "Suggest standard JSON literals for clearly recognized hand-built JSON. Requires a compiler with --warn-json-construction."
+        },
         "abla.trace.server": {
           "type": "string",
           "enum": [

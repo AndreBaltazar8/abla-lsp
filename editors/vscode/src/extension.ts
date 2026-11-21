@@ -330,12 +330,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(...fileEvents);
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "abla" }],
-    initializationOptions: {
-      compiler: { enabled: compilerEnabled, path: compilerPath },
-    },
+    initializationOptions: () => ({
+      compiler: { enabled: compilerEnabled, path: compilerPath, jsonConstruction: vscode.workspace.getConfiguration("abla").get<boolean>("compiler.jsonConstruction", false) },
+    }),
     synchronize: { configurationSection: "abla", fileEvents },
   };
   client = new LanguageClient("abla", "Abla Language Server", serverOptions, clientOptions);
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
+    if (event.affectsConfiguration("abla.compiler.jsonConstruction")) {
+      void client?.restart();
+    }
+  }));
   context.subscriptions.push(
     vscode.commands.registerCommand("abla.moveDeclarations", moveDeclarations),
     vscode.commands.registerCommand("abla.moveTypes", moveDeclarations),

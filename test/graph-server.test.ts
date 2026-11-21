@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,7 +28,7 @@ class Server {
  request(method:string,params:unknown):Promise<Message>{const id=++this.id;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(`timeout ${method}: ${this.stderr}`));},15000);this.pending.set(id,{resolve:m=>{clearTimeout(timer);resolve(m);},reject:e=>{clearTimeout(timer);reject(e);}});this.send({id,method,params});});}
  notify(method:string,params:unknown):void{this.send({method,params});}
  async wait(predicate:(m:Message)=>boolean):Promise<Message>{const deadline=Date.now()+15000;while(Date.now()<deadline){const found=this.messages.find(predicate);if(found)return found;await new Promise(resolve=>setTimeout(resolve,10));}throw new Error('notification timeout: '+this.stderr);}
- async start(root:string,compiler:{path:string;arguments?:string[]}):Promise<void>{const reply=await this.request('initialize',{processId:null,rootUri:pathToFileURL(root).href,capabilities:{},initializationOptions:{compiler}});assert.equal(reply.error,undefined);this.notify('initialized',{});await this.wait(m=>m.method==='window/logMessage'&&String((m.params as {message?:string})?.message).includes('connected to ablac'));}
+ async start(root:string,compiler:{path:string;arguments?:string[]},options:{jsonConstruction?:boolean}={}):Promise<void>{const reply=await this.request('initialize',{processId:null,rootUri:pathToFileURL(root).href,capabilities:{},initializationOptions:{compiler:{...compiler,...options}}});assert.equal(reply.error,undefined);this.notify('initialized',{});await this.wait(m=>m.method==='window/logMessage'&&String((m.params as {message?:string})?.message).includes('connected to ablac'));}
  async stop():Promise<void>{if(this.child.exitCode!==null)return;await this.request('shutdown',null);const exited=new Promise<void>(resolve=>this.child.once('exit',()=>resolve()));this.notify('exit',null);await exited;}
 }
 async function fixture(){const root=await fs.mkdtemp(path.join(os.tmpdir(),'abla-lsp-server-'));const file=path.join(root,'main.ab');const text='// café 😀\nfun target(): int = 42\nfun main: int = target()\n';await fs.writeFile(path.join(root,'abla.toml'),'name = "lsp-test"\nentry = "main.ab"\n');await fs.writeFile(file,text);return{root,file,uri:pathToFileURL(file).href,text};}
@@ -68,6 +68,42 @@ test('unrelated initialization errors are visible and never silently downgrade',
  assert.deepEqual((await trace(log)).filter(m=>m.method==='initialize').map(m=>m.params.analysisMode),['graph-v2']);
 });
 const real=process.env.ABLA_COMPILER_GRAPH;
+
+test('real graph LSP JSON construction lint is opt-in and exposes the compiler fix',{
+ skip:real===undefined?'set ABLA_COMPILER_GRAPH':false,timeout:60000,
+},async context=>{
+ const help=spawnSync(real??'ablac',['--help'],{encoding:'utf8',timeout:15000});assert.ifError(help.error);
+ if(!`${help.stdout}${help.stderr}`.includes('--warn-json-construction')){context.skip('compiler lacks JSON construction lint');return;}
+ const f=await fixture();context.after(async()=>{await fs.rm(f.root,{recursive:true,force:true});});
+ const expression='"{\\"n\\":${n}}"';
+ const text=['// café 😀','import "abla/json"',`fun payload(n: int): string = ${expression}`,'fun main: int = payload(2).size',''].join('\n');
+ await fs.writeFile(f.file,text);
+ for(const enabled of [false,true]){
+  const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);});
+  await server.start(f.root,{path:real??'ablac'},{jsonConstruction:enabled});
+  server.notify('textDocument/didOpen',{textDocument:{uri:f.uri,languageId:'abla',version:1,text}});
+  const symbols=await server.request('textDocument/documentSymbol',{textDocument:{uri:f.uri}});assert.equal(symbols.error,undefined);
+  const latest=server.messages.filter(m=>m.method==='textDocument/publishDiagnostics'&&(m.params as {uri?:string}).uri===f.uri).at(-1);
+  type Diagnostic={code?:string;source?:string;severity?:number;tags?:number[];range:unknown;data?:unknown};
+  const diagnostics=(latest?.params as {diagnostics:Diagnostic[]}).diagnostics;
+  const warning=diagnostics.find(d=>d.code==='W_JSON_CONSTRUCTION');
+  if(!enabled){assert.equal(warning,undefined);await server.stop();continue;}
+  assert.ok(warning,JSON.stringify(diagnostics));assert.equal(warning.severity,2);assert.ok(!warning.tags?.includes(1));
+  const positions=new PositionMap(text);const begin=text.indexOf(expression);
+  assert.deepEqual(warning.range,positions.range({start:begin,end:begin+expression.length}));
+  const response=await server.request('textDocument/codeAction',{textDocument:{uri:f.uri},range:warning.range,context:{diagnostics:[warning]}});assert.equal(response.error,undefined);
+  const action=(response.result as Array<{title:string;edit?:{changes?:Record<string,Array<{range:{start:{line:number;character:number};end:{line:number;character:number}};newText:string}>>}}>).find(a=>a.title==='Use a JSON literal');
+  const edit=action?.edit?.changes?.[f.uri]?.[0];assert.ok(edit,JSON.stringify(response.result));assert.match(edit.newText,/jsonStringify\(\$json/);
+  const fixed=text.slice(0,positions.offset(edit.range.start))+edit.newText+text.slice(positions.offset(edit.range.end));
+  server.messages.length=0;
+  server.notify('textDocument/didChange',{textDocument:{uri:f.uri,version:2},contentChanges:[{text:fixed}]});
+  const refreshed=await server.request('textDocument/documentSymbol',{textDocument:{uri:f.uri}});assert.equal(refreshed.error,undefined);
+  const published=server.messages.filter(m=>m.method==='textDocument/publishDiagnostics'&&(m.params as {uri?:string}).uri===f.uri).at(-1);
+  const after=(published?.params as {diagnostics:Diagnostic[]}).diagnostics;
+  assert.ok(!after.some(d=>d.code==='W_JSON_CONSTRUCTION'||d.severity===1),JSON.stringify(after));
+  await server.stop();
+ }
+});
 
 let documentationFields: Promise<ReadonlySet<string>> | undefined;
 async function documentationFixture(context: TestContext, required: 'signature'|'documentation'|'parameters') {

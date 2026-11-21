@@ -76,6 +76,8 @@ export interface CompilerInitializeParams {
   readonly unusedParameters?: boolean;
   /** Ask for W_UNUSED_DECLARATION warnings too (graph modes). */
   readonly unusedDeclarations?: boolean;
+  /** Suggest JSON literals for confidently recognized hand-built JSON (off by default). */
+  readonly jsonConstruction?: boolean;
 }
 
 export interface CompilerInitializeResult {
