@@ -6,6 +6,7 @@ import {
   foldingRanges,
   formatDocument,
   inferredTypeHints,
+  namedArgumentIndex,
   organizeImports,
   signatureMarkdown,
   symbolSignature,
@@ -134,4 +135,15 @@ test("type hints: an unannotated local, loop variable or lambda parameter gets t
     [" val f = { a", ": string"],
   ]);
   assert.deepEqual(inferredTypeHints(analysis, 0, 5), []);
+});
+
+test("signature help follows a named argument to its parameter", () => {
+  const labels = ["name: string", "count: int", "verbose: bool"];
+  const text = 'render("a", verbose = true, count: 2)';
+  const end = text.indexOf("(");
+  assert.equal(namedArgumentIndex(text, end, text.indexOf("true"), labels), 2);
+  assert.equal(namedArgumentIndex(text, end, text.indexOf("2"), labels), 1);
+  assert.equal(namedArgumentIndex(text, end, text.indexOf('"a"') + 2, labels), undefined);
+  assert.equal(namedArgumentIndex('render(x == 1', 6, 13, labels), undefined);
+  assert.equal(namedArgumentIndex("render(other = 1", 6, 16, labels), undefined);
 });

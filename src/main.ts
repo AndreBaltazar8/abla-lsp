@@ -57,6 +57,8 @@ import {
   signatureMarkdown,
   symbolSignature,
   inferredTypeHints,
+  namedArgumentIndex,
+  type CallContext,
 } from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
 import { dataFixes, diagnosticData, diagnosticMessage } from "./diagnostics.js";
@@ -372,7 +374,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       documentHighlightProvider: true,
       hoverProvider: true,
       completionProvider: { triggerCharacters: ["."] },
-      signatureHelpProvider: { triggerCharacters: ["(", ","] },
+      signatureHelpProvider: { triggerCharacters: ["(", ","], retriggerCharacters: [")", ":", "="] },
       semanticTokensProvider: {
         legend: {
           tokenTypes: ["function", "class", "enum", "variable", "property", "parameter"],
@@ -952,8 +954,9 @@ connection.onSignatureHelp(async (params) => {
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return null;
   const offset = new PositionMap(analysis.text).offset(params.position);
-  const context = callContext(analysis.text, offset);
-  if (context === undefined) return null;
+  const found = callContext(analysis.text, offset);
+  if (found === undefined) return null;
+  let context: CallContext = found;
   const resolvedCall = navigationIndex(analysis.uri).resolve(analysis.uri, new PositionMap(analysis.text).position(context.nameOffset));
   if (resolvedCall === undefined && analysis.authority === "compiler") return null;
   if (resolvedCall !== undefined && resolvedCall.symbol.kind !== "function" && resolvedCall.symbol.kind !== "class") return null;
@@ -961,6 +964,9 @@ connection.onSignatureHelp(async (params) => {
     (symbol) => symbol.kind === "function" && symbol.name === context.name,
   ) : [resolvedCall.symbol];
   if (candidates.length === 0) return null;
+  const labels = candidates[0]?.parameters?.map((parameter) => parameter.label) ?? [];
+  const named = namedArgumentIndex(analysis.text, context.nameOffset + context.name.length, offset, labels);
+  if (named !== undefined) context = { ...context, activeParameter: named };
   return {
     activeSignature: 0,
     activeParameter: context.activeParameter,

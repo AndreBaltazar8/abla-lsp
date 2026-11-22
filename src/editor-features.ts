@@ -318,3 +318,22 @@ export function inferredTypeHints(
   }
   return hints;
 }
+
+/**
+ * The parameter a named argument at the cursor (`f(a, count = 2` or `f(a, count: 2`) refers to, from the labels of the
+ * signature (`count: int`); undefined when the current argument is positional or names no parameter.
+ */
+export function namedArgumentIndex(
+  text: string,
+  nameEnd: number,
+  offset: number,
+  labels: readonly string[],
+): number | undefined {
+  const starts = callArgumentOffsets(text, nameEnd).filter((start) => start <= offset);
+  const start = starts.at(-1);
+  if (start === undefined) return undefined;
+  const named = /^([A-Za-z_][A-Za-z0-9_]*)\s*(?::|=(?!=))/u.exec(text.slice(start, start + 120));
+  if (named === null) return undefined;
+  const index = labels.findIndex((label) => label === named[1] || label.startsWith(`${named[1]}:`) || label.startsWith(`${named[1]} `));
+  return index < 0 ? undefined : index;
+}
