@@ -25,7 +25,7 @@ interface WorkspaceEdit {
     | { kind: "delete"; uri: string }
   >;
 }
-interface DocumentSymbol { name: string; selectionRange: Range; children?: DocumentSymbol[] }
+interface DocumentSymbol { name: string; range: Range; selectionRange: Range; children?: DocumentSymbol[] }
 
 class Usage extends Error {}
 class Refused extends Error {}
@@ -201,12 +201,18 @@ async function resolveTarget(server: Server, text: string): Promise<Target> {
   const uri = pathToFileURL(file).href;
   await openFile(server, file);
   const wanted = text.slice(hash + 1).split(".");
-  let level = await documentSymbols(server, uri);
+  const symbols = await documentSymbols(server, uri);
+  const before = (left: Position, right: Position): boolean => left.line < right.line || (left.line === right.line && left.character <= right.character);
+  const inside = (outer: DocumentSymbol, inner: DocumentSymbol): boolean =>
+    inner !== outer && before(outer.range.start, inner.range.start) && before(inner.range.end, outer.range.end);
+  // The server lists a file's symbols flat, members after their class: a member is a symbol whose range lies inside its owner's.
+  let level = symbols.filter((symbol) => !symbols.some((other) => inside(other, symbol)));
   let found: DocumentSymbol | undefined;
   for (const name of wanted) {
     found = level.find((symbol) => symbol.name === name || symbol.name.startsWith(`${name}(`));
     if (found === undefined) throw new Usage(`${text}: no symbol "${name}" in ${path.relative(process.cwd(), file)}`);
-    level = found.children ?? [];
+    const owner: DocumentSymbol = found;
+    level = [...(owner.children ?? []), ...symbols.filter((symbol) => inside(owner, symbol))];
   }
   if (found === undefined) throw new Usage(`${text}: empty symbol path`);
   return { file, uri, position: found.selectionRange.start };
