@@ -232,6 +232,11 @@
           "default": false,
           "description": "Suggest standard JSON literals for clearly recognized hand-built JSON. Requires a compiler with --warn-json-construction."
         },
+        "abla.inlayHints.types": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the inferred type after a local, loop variable or lambda parameter that has no written type (needs the compiler; a binding nothing uses gets no hint)."
+        },
         "abla.trace.server": {
           "type": "string",
           "enum": [

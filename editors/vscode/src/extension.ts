@@ -332,6 +332,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "abla" }],
     initializationOptions: () => ({
+      inlayHints: { types: vscode.workspace.getConfiguration("abla").get<boolean>("inlayHints.types", true) },
       compiler: { enabled: compilerEnabled, path: compilerPath, jsonConstruction: vscode.workspace.getConfiguration("abla").get<boolean>("compiler.jsonConstruction", false) },
     }),
     synchronize: { configurationSection: "abla", fileEvents },
@@ -339,7 +340,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   client = new LanguageClient("abla", "Abla Language Server", serverOptions, clientOptions);
   registerDebugging(context);
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
-    if (event.affectsConfiguration("abla.compiler.jsonConstruction")) {
+    if (event.affectsConfiguration("abla.compiler.jsonConstruction") || event.affectsConfiguration("abla.inlayHints.types")) {
       void client?.restart();
     }
   }));

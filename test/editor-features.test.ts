@@ -5,6 +5,7 @@ import {
   callArgumentOffsets,
   foldingRanges,
   formatDocument,
+  inferredTypeHints,
   organizeImports,
   signatureMarkdown,
   symbolSignature,
@@ -98,4 +99,39 @@ test("a signature leaves out the comments inside the declaration, and not a stri
   const exact = 'fun render(\n    label: string = "```"\n): string';
   assert.equal(symbolSignature(analysis, { ...symbol, signature: exact }), exact);
   assert.equal(signatureMarkdown(exact), '````abla\n'+exact+'\n````');
+});
+
+test("type hints: an unannotated local, loop variable or lambda parameter gets the type of its first typed use", () => {
+  const text = "fun main {\n val n = 3\n val s: string = \"x\"\n for (i in 0 until n) { n + i }\n val f = { a -> a }\n}";
+  const at = (needle: string, skip = 0): { start: number; end: number } => {
+    const start = text.indexOf(needle) + skip;
+    return { start, end: start + 1 };
+  };
+  const symbol = (id: string, name: string, detail: string, range: { start: number; end: number }): AblaSymbol => ({
+    id, name, detail, kind: detail === "lambda.parameter" ? "parameter" : "value", uri: "file:///t.ab", range, selectionRange: range, topLevel: false,
+  });
+  const analysis: DocumentAnalysis = {
+    authority: "compiler", uri: "file:///t.ab", version: 1, text, diagnostics: [],
+    symbols: [
+      symbol("n", "n", "local.val", at("val n", 4)),
+      symbol("s", "s", "local.val", at("val s", 4)),
+      symbol("i", "i", "for", at("(i in", 1)),
+      symbol("a", "a", "lambda.parameter", at("{ a ->", 2)),
+      symbol("f", "f", "local.val", at("val f", 4)),
+    ],
+    occurrences: [
+      { name: "n", range: at("until n", 6), declarationId: "n" },
+      { name: "n", range: at("n + i", 0), declarationId: "n", type: "i64" },
+      { name: "i", range: at("+ i", 2), declarationId: "i", type: "i64" },
+      { name: "a", range: at("a }", 0), declarationId: "a", type: "string" },
+      { name: "s", range: at("s:", 0), declarationId: "s", type: "string" },
+    ],
+  };
+  const hints = inferredTypeHints(analysis, 0, text.length);
+  assert.deepEqual(hints.map((hint) => [text.slice(0, hint.offset).split("\n").pop(), hint.label]), [
+    [" val n", ": i64"],
+    [" for (i", ": i64"],
+    [" val f = { a", ": string"],
+  ]);
+  assert.deepEqual(inferredTypeHints(analysis, 0, 5), []);
 });

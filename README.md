@@ -8,8 +8,8 @@ through the versioned `ablac analyze --stdio` protocol.
 The current server provides compiler diagnostics for saved files and unsaved
 overlays, canonical definitions/declarations/type definitions/references,
 document and workspace symbols, hover and signatures, scope/import-aware and
-typed-member completion, semantic tokens, compiler-resolved parameter inlay
-hints, document highlights, call hierarchy, folding and selection ranges,
+typed-member completion, semantic tokens, compiler-resolved parameter and inferred-type inlay
+hints (`abla.inlayHints.types`), document highlights, call hierarchy, folding and selection ranges,
 safe whitespace formatting, import organization, and import links. If the
 compiler is unavailable it restarts with bounded backoff and keeps a clearly
 labelled, conservative syntax mode available.

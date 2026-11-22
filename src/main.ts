@@ -55,6 +55,7 @@ import {
   organizeImports,
   signatureMarkdown,
   symbolSignature,
+  inferredTypeHints,
 } from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
 import { dataFixes, diagnosticData, diagnosticMessage } from "./diagnostics.js";
@@ -111,8 +112,11 @@ let compilerRestartAttempt = 0;
 let shuttingDown = false;
 /** The client shows edits with annotations that need confirmation for review (LSP 3.16 change annotations). */
 let clientPreviewsEdits = false;
+/** Show `: T` after a local, loop variable or lambda parameter whose type the compiler inferred (initializationOptions.inlayHints.types, default on). */
+let typeInlayHints = true;
 
 interface InitializationOptions {
+  readonly inlayHints?: { readonly types?: boolean };
   readonly compiler?: {
     readonly enabled?: boolean;
     readonly path?: string;
@@ -333,6 +337,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   const initialization = params.initializationOptions as InitializationOptions | undefined;
   const workspaceEdits = params.capabilities.workspace?.workspaceEdit;
   clientPreviewsEdits = workspaceEdits?.documentChanges === true && workspaceEdits.changeAnnotationSupport !== undefined;
+  typeInlayHints = initialization?.inlayHints?.types ?? true;
   const configured = initialization?.compiler;
   compilerConfiguration = {
     enabled: configured?.enabled ?? true,
@@ -1091,6 +1096,11 @@ connection.languages.inlayHint.on(async (params) => {
         kind: InlayHintKind.Parameter,
         paddingRight: true,
       });
+    }
+  }
+  if (typeInlayHints) {
+    for (const hint of inferredTypeHints(analysis, requestedStart, requestedEnd)) {
+      hints.push({ position: positions.position(hint.offset), label: hint.label, kind: InlayHintKind.Type });
     }
   }
   return hints;

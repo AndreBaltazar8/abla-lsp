@@ -290,3 +290,31 @@ export function organizeImports(text: string): TextEdit | undefined {
     newText: sorted.join("\n"),
   };
 }
+
+/**
+ * `: T` after a binding that has no written type: a local val/var, a loop variable, a lambda parameter. The compiler
+ * puts a type on the uses of a binding, not on its declaration, so the type of the first use that has one is the
+ * binding's (a binding nothing uses gets no hint).
+ */
+export function inferredTypeHints(
+  analysis: DocumentAnalysis,
+  start: number,
+  end: number,
+): readonly { readonly offset: number; readonly label: string }[] {
+  const types = new Map<string, string>();
+  for (const occurrence of analysis.occurrences) {
+    if (occurrence.declarationId === undefined || occurrence.type === undefined || occurrence.type === "" || types.has(occurrence.declarationId)) continue;
+    types.set(occurrence.declarationId, occurrence.type);
+  }
+  const hints: { offset: number; label: string }[] = [];
+  for (const symbol of analysis.symbols) {
+    const at = symbol.selectionRange.end;
+    if (at < start || symbol.selectionRange.start > end) continue;
+    if (!/^(?:local\.(?:val|var|own)|for|lambda\.parameter)/u.test(symbol.detail)) continue;
+    const type = types.get(symbol.id);
+    if (type === undefined) continue;
+    if (/^\s*:/u.test(analysis.text.slice(at, at + 12))) continue;
+    hints.push({ offset: at, label: `: ${type}` });
+  }
+  return hints;
+}
