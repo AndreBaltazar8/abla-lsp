@@ -10,16 +10,8 @@ const compiler = process.env.ABLA_COMPILER;
 
 interface Reply { id?: number; method?: string; result?: unknown; error?: { message: string } }
 
-test("refactor code actions are offered at the cursor and resolve to compiler-validated edits", {
-  skip: compiler === undefined ? "set ABLA_COMPILER to run the compiler integration gate" : false,
-  timeout: 120_000,
-}, async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-actions-"));
-  const text = "fun main: int {\n    val n = 3\n    var total = n * 2\n    total\n}\n";
-  await fs.writeFile(path.join(root, "abla.toml"), 'name = "actions"\nentry = "main.ab"\n');
-  await fs.writeFile(path.join(root, "main.ab"), text);
-  context.after(() => fs.rm(root, { recursive: true, force: true }));
-  const uri = pathToFileURL(path.join(root, "main.ab")).href;
+type Context = { after(callback: () => unknown): void };
+async function connect(context: Context, root: string, uri: string, text: string): Promise<{ request: (method: string, params: unknown) => Promise<Reply> }> {
   const child = spawn(process.execPath, ["dist/src/main.js", "--stdio"], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ABLA_COMPILER: compiler as string } });
   context.after(() => child.kill());
   let buffer = Buffer.alloc(0);
@@ -51,6 +43,20 @@ test("refactor code actions are offered at the cursor and resolve to compiler-va
   await request("initialize", { processId: process.pid, rootUri: pathToFileURL(root).href, capabilities: {} });
   send({ method: "initialized", params: {} });
   send({ method: "textDocument/didOpen", params: { textDocument: { uri, languageId: "abla", version: 1, text } } });
+  return { request };
+}
+
+test("refactor code actions are offered at the cursor and resolve to compiler-validated edits", {
+  skip: compiler === undefined ? "set ABLA_COMPILER to run the compiler integration gate" : false,
+  timeout: 120_000,
+}, async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-actions-"));
+  const text = "fun main: int {\n    val n = 3\n    var total = n * 2\n    total\n}\n";
+  await fs.writeFile(path.join(root, "abla.toml"), 'name = "actions"\nentry = "main.ab"\n');
+  await fs.writeFile(path.join(root, "main.ab"), text);
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const uri = pathToFileURL(path.join(root, "main.ab")).href;
+  const { request } = await connect(context, root, uri, text);
   const range = (line: number, from: number, to: number) => ({ start: { line, character: from }, end: { line, character: to } });
   const actions = async (r: unknown): Promise<Array<{ title: string; kind: string }>> => {
     for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -73,4 +79,27 @@ test("refactor code actions are offered at the cursor and resolve to compiler-va
   const variable = await request("codeAction/resolve", selected[1]);
   assert.match(JSON.stringify(variable.result), /val extracted = n \* 2/u);
   await request("shutdown", null);
+});
+
+test("source.fixAll adds the missing import and removes the unused one in one compiler-validated edit", {
+  skip: compiler === undefined ? "set ABLA_COMPILER to run the compiler integration gate" : false,
+  timeout: 120_000,
+}, async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-fixall-"));
+  const text = 'import "abla/text"\nfun main: int {\n    val v = jsonString(\"x\")\n    0\n}\n';
+  await fs.writeFile(path.join(root, "abla.toml"), 'name = "fixall"\nentry = "main.ab"\n');
+  await fs.writeFile(path.join(root, "main.ab"), text);
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const uri = pathToFileURL(path.join(root, "main.ab")).href;
+  const { request } = await connect(context, root, uri, text);
+  const whole = { start: { line: 0, character: 0 }, end: { line: 5, character: 0 } };
+  let actions: Array<{ kind: string; edit?: { changes: Record<string, Array<{ newText: string }>> } }> = [];
+  for (let attempt = 0; attempt < 40 && actions.length === 0; attempt += 1) {
+    const reply = await request("textDocument/codeAction", { textDocument: { uri }, range: whole, context: { diagnostics: [], only: ["source.fixAll"] } });
+    actions = (reply.result ?? []) as typeof actions;
+    if (actions.length === 0) await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  assert.equal(actions[0]?.kind, "source.fixAll");
+  const edits = Object.values(actions[0]?.edit?.changes ?? {}).flat().map((edit) => edit.newText);
+  assert.ok(edits.some((value) => value.includes('import "abla/json"')), JSON.stringify(edits));
 });

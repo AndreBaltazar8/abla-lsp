@@ -48,6 +48,10 @@ Refactorings also appear as code actions: `refactor.extract.function` and `refac
 `refactor.inline` and `refactor.rewrite.binding` (val/var) at a local or top-level function. The action carries only its
 command; the compiler-validated edit is computed when it is chosen (`codeAction/resolve`).
 
+`source.fixAll` (VS Code: `editor.codeActionsOnSave` `source.fixAll`) applies, in one compiler-validated edit, every
+diagnostic whose single compiler fix adds a missing import or removes an unused one. Did-you-mean replacements and
+unused-local fixes stay explicit quick fixes.
+
 ## Headless refactoring: abla-refactor
 
 `abla-refactor` drives the transactional engine from the command line (agents, scripts, CI): it starts the

@@ -35,6 +35,7 @@ import {
   type CompletionItem,
   type Hover,
   type InlayHint,
+  type TextEdit,
   type ReferenceParams,
   type RenameParams,
   type TextDocumentPositionParams,
@@ -385,7 +386,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       documentFormattingProvider: true,
       codeActionProvider: {
         codeActionKinds: [
-          CodeActionKind.QuickFix, CodeActionKind.SourceOrganizeImports, CodeActionKind.RefactorExtract,
+          CodeActionKind.QuickFix, CodeActionKind.SourceOrganizeImports, CodeActionKind.SourceFixAll, CodeActionKind.RefactorExtract,
           CodeActionKind.RefactorInline, CodeActionKind.RefactorRewrite,
         ],
         resolveProvider: true,
@@ -1260,9 +1261,47 @@ connection.onCodeAction(async (params) => {
       });
     }
   }
+  // Fix all: only when asked for by kind (a save action), since the combined edit is validated by the compiler.
+  if (
+    semanticActions && analysis.authority === "compiler" && params.context.only !== undefined &&
+    params.context.only.some((kind) => CodeActionKind.SourceFixAll.startsWith(kind) || kind.startsWith(CodeActionKind.SourceFixAll))
+  ) {
+    const edit = fixAllEdit(analysis);
+    if (edit !== undefined) {
+      try {
+        await validateCompilerEdit(edit);
+        actions.push({ title: "Fix all auto-fixable Abla problems", kind: CodeActionKind.SourceFixAll, edit });
+      } catch {
+        // A combined fix is offered only after compiler validation.
+      }
+    }
+  }
   if (semanticActions && analysis.authority === "compiler") actions.push(...refactorActions(analysis, params.range, params.context.only));
   return actions;
 });
+
+/**
+ * Every unambiguous compiler fix of the file in one edit: a diagnostic with exactly one fix of kind `import` (add the
+ * missing import) or `remove` (an unused import). A did-you-mean (`replace`) and the rename/removal of unused locals
+ * stay explicit choices.
+ */
+function fixAllEdit(analysis: DocumentAnalysis): WorkspaceEdit | undefined {
+  const positions = new PositionMap(analysis.text);
+  const edits: TextEdit[] = [];
+  const taken: { start: number; end: number }[] = [];
+  for (const diagnostic of analysis.diagnostics) {
+    const fixes = diagnostic.fixes ?? [];
+    const fix = fixes[0];
+    if (fixes.length !== 1 || fix === undefined || (fix.kind !== "import" && fix.kind !== "remove")) continue;
+    for (const edit of fix.edits) {
+      // The same import wanted by several diagnostics is added once; an edit inside an earlier one is dropped.
+      if (taken.some((range) => (edit.range.start === range.start && edit.range.end === range.end) || (edit.range.start < range.end && range.start < edit.range.end))) continue;
+      taken.push(edit.range);
+      edits.push({ range: positions.range(edit.range), newText: edit.newText });
+    }
+  }
+  return edits.length === 0 ? undefined : { changes: { [analysis.uri]: edits } };
+}
 
 interface RefactorActionData { readonly refactor: { readonly command: string; readonly argument: Record<string, unknown> } }
 
