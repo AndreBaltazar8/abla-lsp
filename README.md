@@ -44,6 +44,10 @@ safety boundaries.
 See [graph-aware analysis](docs/compiler-graph.md) for capability negotiation,
 no-evaluation editor policy, positional queries and incomplete-refactor limits.
 
+Refactorings also appear as code actions: `refactor.extract.function` and `refactor.extract.variable` on a selection,
+`refactor.inline` and `refactor.rewrite.binding` (val/var) at a local or top-level function. The action carries only its
+command; the compiler-validated edit is computed when it is chosen (`codeAction/resolve`).
+
 ## Headless refactoring: abla-refactor
 
 `abla-refactor` drives the transactional engine from the command line (agents, scripts, CI): it starts the

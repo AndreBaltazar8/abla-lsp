@@ -384,7 +384,11 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       inlayHintProvider: true,
       documentFormattingProvider: true,
       codeActionProvider: {
-        codeActionKinds: [CodeActionKind.QuickFix, CodeActionKind.SourceOrganizeImports],
+        codeActionKinds: [
+          CodeActionKind.QuickFix, CodeActionKind.SourceOrganizeImports, CodeActionKind.RefactorExtract,
+          CodeActionKind.RefactorInline, CodeActionKind.RefactorRewrite,
+        ],
+        resolveProvider: true,
       },
       documentLinkProvider: { resolveProvider: false },
       callHierarchyProvider: true,
@@ -1256,7 +1260,57 @@ connection.onCodeAction(async (params) => {
       });
     }
   }
+  if (semanticActions && analysis.authority === "compiler") actions.push(...refactorActions(analysis, params.range, params.context.only));
   return actions;
+});
+
+interface RefactorActionData { readonly refactor: { readonly command: string; readonly argument: Record<string, unknown> } }
+
+/**
+ * Refactorings offered at the cursor or selection. The edit is not computed here (a request comes at every cursor
+ * move and each edit is compiler-validated): the action carries its command and is resolved when it is chosen.
+ */
+function refactorActions(analysis: DocumentAnalysis, selection: Range, only: readonly string[] | undefined): CodeAction[] {
+  const wants = (kind: string): boolean => only === undefined || only.some((wanted) => kind.startsWith(wanted));
+  const actions: CodeAction[] = [];
+  const add = (title: string, kind: string, command: string, argument: Record<string, unknown>): void => {
+    if (!wants(kind)) return;
+    const data: RefactorActionData = { refactor: { command, argument } };
+    actions.push({ title, kind, data });
+  };
+  const positions = new PositionMap(analysis.text);
+  const start = positions.offset(selection.start);
+  const end = positions.offset(selection.end);
+  if (end > start && analysis.text.slice(start, end).trim() !== "") {
+    const name = (base: string): string => {
+      let candidate = base;
+      for (let attempt = 2; new RegExp(`\\b${candidate}\\b`, "u").test(analysis.text); attempt += 1) candidate = `${base}${attempt}`;
+      return candidate;
+    };
+    add("Extract to function", `${CodeActionKind.RefactorExtract}.function`, "abla.extractFunction", { uri: analysis.uri, range: selection, name: name("extracted") });
+    if (!analysis.text.slice(start, end).includes("\n")) {
+      add("Extract to local variable", `${CodeActionKind.RefactorExtract}.variable`, "abla.introduceBinding", { uri: analysis.uri, range: selection, name: name("extracted"), destination: "local" });
+    }
+  }
+  const target = index.resolve(analysis.uri, selection.start);
+  const symbol = target?.symbol;
+  if (symbol !== undefined) {
+    const local = symbol.detail === "local.val" || symbol.detail === "local.var";
+    if (local || (symbol.kind === "function" && symbol.topLevel)) add(`Inline '${symbol.name}'`, CodeActionKind.RefactorInline, "abla.inlineSymbol", { symbolId: symbol.id });
+    if (local) {
+      const to = symbol.detail === "local.val" ? "var" : "val";
+      add(`Convert '${symbol.name}' to ${to}`, `${CodeActionKind.RefactorRewrite}.binding`, "abla.changeBindingKind", { symbolId: symbol.id, kind: to });
+    }
+  }
+  return actions;
+}
+
+connection.onCodeActionResolve(async (action) => {
+  const data = (action.data as RefactorActionData | undefined)?.refactor;
+  if (data === undefined) return action;
+  const edit = await executeRefactorCommand({ command: data.command, arguments: [{ ...data.argument, apply: false }] });
+  if (edit !== null) action.edit = edit;
+  return action;
 });
 
 connection.onDocumentLinks((params) => {
@@ -1381,7 +1435,7 @@ function commandSymbolId(
   return index.resolve(selection.uri, selection.position)?.symbol.id ?? "";
 }
 
-connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
+async function executeRefactorCommand(params: { readonly command: string; readonly arguments?: readonly unknown[] }): Promise<WorkspaceEdit | null> {
   const argument = params.arguments?.[0] as { readonly uri?: string; readonly selection?: CommandSelection; readonly selections?: readonly CommandSelection[]; readonly renames?: readonly RenameRequest[]; readonly symbolId?: string; readonly classSymbolId?: string; readonly symbolIds?: readonly string[] } | undefined;
   const selectedId = argument?.symbolId ?? argument?.classSymbolId ?? argument?.symbolIds?.[0];
   const requestedUri = argument?.selection?.uri ?? argument?.selections?.[0]?.uri ?? argument?.renames?.[0]?.uri ?? argument?.uri ?? (selectedId === undefined ? undefined : index.symbolById(selectedId)?.symbol.uri);
@@ -1598,7 +1652,8 @@ connection.onExecuteCommand(async (params): Promise<WorkspaceEdit | null> => {
     }
   }
   return result.edit;
-});
+}
+connection.onExecuteCommand(executeRefactorCommand);
 
 connection.onShutdown(async () => {
   shuttingDown = true;
