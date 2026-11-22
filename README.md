@@ -44,6 +44,28 @@ safety boundaries.
 See [graph-aware analysis](docs/compiler-graph.md) for capability negotiation,
 no-evaluation editor policy, positional queries and incomplete-refactor limits.
 
+## Headless refactoring: abla-refactor
+
+`abla-refactor` drives the transactional engine from the command line (agents, scripts, CI): it starts the
+server, asks for the same compiler-validated edit an editor gets, and prints a unified diff; `--apply` writes
+every file atomically (temporary siblings first, then renames). Exit status: 0 done, 1 refused by the refactoring
+or the compiler validation, 2 usage, 3 server or compiler unavailable.
+
+```sh
+abla-refactor rename src/parser.ab#bootstrapCanonicalDeclarationSourceName bootstrapCanonicalDeclarationBaseName --entry src/orc_main.ab
+abla-refactor rename src/parser.ab:3910:5 newName --entry src/orc_main.ab --apply
+abla-refactor inline file.ab:12:9
+abla-refactor extract file.ab:20:5-24:6 helper
+abla-refactor move a.ab#f a.ab#g --to b.ab --create
+abla-refactor recipe recipe.json [--staged]
+abla-refactor command abla.changeSignature args.json
+```
+
+A target is `file:line:column` (1-based) or `file#name` / `file#Container.name`. The workspace root is the nearest
+`abla.toml` above the file (`--root`); a package whose `abla.toml` names no entry needs `--entry <file>`
+(ablac's own `src/` does). The compiler is `--compiler`, then `ABLA_COMPILER`, then `ablac`. A rename does not
+touch comments or strings that mention the name. A whole-compiler rename takes about 30 s.
+
 ## Unused code
 
 The compiler's warnings arrive greyed out (the `unnecessary` tag) with quick fixes. Unused imports are on

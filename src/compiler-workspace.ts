@@ -65,6 +65,8 @@ export class CompilerWorkspace {
   readonly #log: (message: string) => void;
   #snapshot: CompilerWorkspaceSnapshot | undefined;
   #scope: string | undefined;
+  /** A configured project entry (a file) analyzes that entry whatever file is asked about. */
+  readonly #entry: string | undefined;
   #epoch = 0;
   #snapshotEpoch = -1;
   #fullDemandEpoch = -1;
@@ -80,7 +82,9 @@ export class CompilerWorkspace {
     readonly roots: readonly string[]; readonly capabilities: readonly string[];
     readonly accept: (snapshot: CompilerWorkspaceSnapshot) => void;
     readonly log?: (message: string) => void;
+    readonly entry?: string;
   }) {
+    this.#entry = options.entry;
     this.#client = client; this.#roots = options.roots; this.#accept = options.accept;
     this.#log = options.log ?? (() => undefined);
     this.graph = options.capabilities.includes("module-graph-analysis-v1");
@@ -132,7 +136,7 @@ export class CompilerWorkspace {
     const epoch = this.#epoch;
     if (occurrences) this.#fullDemandEpoch = epoch;
     const needOccurrences = occurrences || this.#fullDemandEpoch === epoch;
-    const scope = this.graph ? await compilerScope(uri, this.#roots, this.#snapshot, this.#scope) : undefined;
+    const scope = this.graph ? (this.#entry ?? await compilerScope(uri, this.#roots, this.#snapshot, this.#scope)) : undefined;
     if (this.#disposed || epoch !== this.#epoch) return undefined;
     const cached = this.#snapshot;
     const full = cached?.documents.every((d) => d.occurrencesAvailable !== false && d.symbolsAvailable !== false && d.diagnosticsAvailable !== false) ?? false;
