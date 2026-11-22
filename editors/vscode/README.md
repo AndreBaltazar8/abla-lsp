@@ -38,5 +38,20 @@ fields, an array's length and elements.
 }
 ```
 
-`program` may also be a project directory (built with `--project`). See the
+`program` may also be a project directory (built with `--project`).
+
+To debug a program that is already running (or starts later), attach to it. `program` is the executable built with
+`ablac build -g` (it is not built for an attach), so the debugger has the Abla types:
+
+```json
+{
+  "type": "abla",
+  "request": "attach",
+  "name": "Attach to Abla program",
+  "program": "${workspaceFolder}/build/debug/main",
+  "waitFor": true
+}
+```
+
+Use `pid` instead of `waitFor` for a process that is already running. See the
 compiler's `docs/debugging.md` for what a development build describes.

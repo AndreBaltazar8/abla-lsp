@@ -45,9 +45,34 @@ async function build(compiler: string, args: string[], cwd: string): Promise<num
   return ended;
 }
 
+/**
+ * Attach to a running Abla program (by `pid`, or `waitFor` its name). `program` is the executable built with
+ * `ablac build -g`, so lldb has the Abla types; it is not built here.
+ */
+export function attachConfiguration(configuration: vscode.DebugConfiguration): vscode.DebugConfiguration | undefined {
+  const pid = configuration.pid;
+  const waitFor = configuration.waitFor === true;
+  if (pid === undefined && !waitFor) {
+    void vscode.window.showErrorMessage("Abla debugging (attach): set `pid`, or `waitFor` with `program` (the executable to wait for).");
+    return undefined;
+  }
+  return {
+    type: "lldb-dap",
+    request: "attach",
+    name: configuration.name,
+    ...(typeof configuration.program === "string" && configuration.program !== "" ? { program: configuration.program } : {}),
+    ...(pid === undefined ? {} : { pid }),
+    ...(waitFor ? { waitFor: true } : {}),
+    initCommands: [...ablaLldbCommands, ...(Array.isArray(configuration.initCommands) ? configuration.initCommands : [])],
+  };
+}
+
 export class AblaDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
   provideDebugConfigurations(): vscode.DebugConfiguration[] {
-    return [{ type: "abla", request: "launch", name: "Debug Abla program", program: "${file}" }];
+    return [
+      { type: "abla", request: "launch", name: "Debug Abla program", program: "${file}" },
+      { type: "abla", request: "attach", name: "Attach to Abla program", program: "${workspaceFolder}/build/debug/main", waitFor: true },
+    ];
   }
 
   async resolveDebugConfiguration(
@@ -60,8 +85,9 @@ export class AblaDebugConfigurationProvider implements vscode.DebugConfiguration
       if (document?.languageId !== "abla") return undefined;
       configuration = { type: "abla", request: "launch", name: "Debug Abla program", program: document.fileName };
     }
+    const attaching = configuration.request === "attach";
     const program = typeof configuration.program === "string" ? configuration.program : "";
-    if (program === "") {
+    if (program === "" && !attaching) {
       void vscode.window.showErrorMessage("Abla debugging: set `program` to a .ab file or a project directory.");
       return undefined;
     }
@@ -70,6 +96,7 @@ export class AblaDebugConfigurationProvider implements vscode.DebugConfiguration
         `Abla debugging runs the program under lldb-dap: install the "LLDB DAP" extension (${lldbDapExtension}).`);
       return undefined;
     }
+    if (attaching) return attachConfiguration(configuration);
     const compiler = vscode.workspace.getConfiguration("abla").get<string>("compiler.path", "ablac");
     const cwd = typeof configuration.cwd === "string" ? configuration.cwd
       : folder?.uri.fsPath ?? directoryOf(program);

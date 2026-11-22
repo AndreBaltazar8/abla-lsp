@@ -52,6 +52,28 @@
           "abla"
         ],
         "configurationAttributes": {
+          "attach": {
+            "properties": {
+              "pid": {
+                "type": ["number", "string"],
+                "description": "The process to attach to."
+              },
+              "waitFor": {
+                "type": "boolean",
+                "description": "Wait for a process started from `program` to appear, then attach.",
+                "default": false
+              },
+              "program": {
+                "type": "string",
+                "description": "The executable (built with `ablac build -g`), so the debugger has the Abla types. It is not built for an attach."
+              },
+              "initCommands": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "More lldb commands to run first (after the Abla summaries)."
+              }
+            }
+          },
           "launch": {
             "required": [
               "program"
@@ -103,6 +125,13 @@
             "request": "launch",
             "name": "Debug Abla program",
             "program": "${file}"
+          },
+          {
+            "type": "abla",
+            "request": "attach",
+            "name": "Attach to Abla program",
+            "program": "${workspaceFolder}/build/debug/main",
+            "waitFor": true
           }
         ],
         "configurationSnippets": [
@@ -114,6 +143,17 @@
               "request": "launch",
               "name": "Debug Abla program",
               "program": "^\"\\${file}\""
+            }
+          },
+          {
+            "label": "Abla: Attach",
+            "description": "Attach to a running Abla program built with debug information.",
+            "body": {
+              "type": "abla",
+              "request": "attach",
+              "name": "Attach to Abla program",
+              "program": "^\"\\${workspaceFolder}/build/debug/main\"",
+              "waitFor": true
             }
           }
         ]
