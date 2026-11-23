@@ -80,7 +80,14 @@ if [ -n "$hx" ]; then
   cp "$root/editors/helix/languages.toml" "$config/helix/languages.toml"
   grammar=$(cd "$root/.." && pwd)/tree-sitter-abla
   if [ -d "$grammar" ]; then
-    mkdir -p "$config/helix/runtime/queries"
+    # Only abla's grammar, from the sibling checkout: hx would build all 246 default ones.
+    { printf 'use-grammars = { only = ["abla"] }\n\n'; sed "s|source = { git = .*|source = { path = \"$grammar\" }|" "$config/helix/languages.toml"; } > "$config/helix/languages.new"
+    mv "$config/helix/languages.new" "$config/helix/languages.toml"
+    mkdir -p "$config/helix/runtime/grammars" "$config/helix/runtime/queries"
+    if command -v cc >/dev/null 2>&1; then
+      XDG_CONFIG_HOME="$config" "$hx" --grammar build </dev/null >"$config/grammar.log" 2>&1 && [ -f "$config/helix/runtime/grammars/abla.so" ] ||
+        { echo "FAIL helix: grammar build"; cat "$config/grammar.log" >&2; status=1; }
+    fi
     cp -r "$root/editors/helix/queries/abla" "$config/helix/runtime/queries/abla"
   fi
   mkdir -p "$config/bin"
