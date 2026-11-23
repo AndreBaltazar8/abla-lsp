@@ -1,0 +1,15 @@
+-- nvim-lspconfig snippet (for setups that use lspconfig instead of vim.lsp.config):
+--
+--   local configs = require("lspconfig.configs")
+--   if not configs.abla then
+--     configs.abla = {
+--       default_config = {
+--         cmd = { "abla-lsp", "--stdio" },
+--         filetypes = { "abla" },
+--         root_dir = require("lspconfig.util").root_pattern("abla.toml", "abla.lock", ".git"),
+--       },
+--     }
+--   end
+--   require("lspconfig").abla.setup({})
+--
+-- The server finds the compiler through ABLA_COMPILER or `ablac` on PATH.

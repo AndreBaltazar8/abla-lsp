@@ -1,0 +1,16 @@
+# Append to ~/.config/helix/languages.toml (or a project's .helix/languages.toml).
+# Needs `abla-lsp` (npm package) and `ablac` on PATH; set ABLA_COMPILER to use another compiler.
+
+[language-server.abla-lsp]
+command = "abla-lsp"
+args = ["--stdio"]
+
+[[language]]
+name = "abla"
+scope = "source.abla"
+file-types = ["ab"]
+roots = ["abla.toml", "abla.lock", ".git"]
+comment-tokens = ["//", "///"]
+block-comment-tokens = [{ start = "/*", end = "*/" }]
+indent = { tab-width = 2, unit = "  " }
+language-servers = ["abla-lsp"]

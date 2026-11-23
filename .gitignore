@@ -4,3 +4,4 @@ coverage/
 *.tgz
 *.vsix
 .DS_Store
+target/

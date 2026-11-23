@@ -1,0 +1,8 @@
+fun double(value: int): int {
+  return value * 2
+}
+
+fun main() {
+  val result = double(21)
+  println(result)
+}

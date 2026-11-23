@@ -102,6 +102,23 @@ It needs a compiler with `--warn-regex-construction`.
 The removals are compiler-validated like the other refactorings, and a client that supports change annotations
 shows each one for review before it applies (`needsConfirmation`).
 
+## Other editors
+
+Ready-made configurations live in `editors/`. Each needs `abla-lsp` (this package) and `ablac` on `PATH`
+(`ABLA_COMPILER` selects another compiler).
+
+- **Neovim 0.11+** (`editors/neovim`): add the directory to `runtimepath`, then
+  `require("abla").setup({ cmd = { "abla-lsp", "--stdio" } })`. It registers the `.ab` filetype, a regex-based
+  syntax file (no tree-sitter), comment and indent settings and the `vim.lsp.config("abla")` client rooted at
+  `abla.toml`, `abla.lock` or `.git`. `editors/neovim/lsp-abla.lua` holds the nvim-lspconfig form.
+- **Helix** (`editors/helix/languages.toml`): append it to `~/.config/helix/languages.toml`. Check with
+  `hx --health abla`. Helix has no Abla tree-sitter grammar yet, so there is no highlighting, only the language server.
+- **Zed** (`editors/zed`): a dev extension (`zed: install dev extension`) that starts `abla-lsp --stdio`. It is a
+  Rust extension (`cargo check` builds it); there is no tree-sitter grammar yet, so no highlighting.
+
+`npm run test:editors` (also part of `npm run validate`) attaches Neovim headlessly to the server and requires a hover
+on a fixture, and runs `hx --health abla` against the Helix config. A missing editor is skipped.
+
 ## Development
 
 Node.js 20 or newer and Abla 0.2.46 or newer with analysis protocol version 1
