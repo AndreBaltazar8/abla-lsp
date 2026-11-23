@@ -390,3 +390,13 @@ export function importRenameEdits(
   }
   return edits;
 }
+
+/**
+ * Whether a source file is an `ablac test` program: it imports `abla/test` (its `main` makes checks and returns
+ * `testsPassed()`), or is named `test.ab` / `*_test.ab` / `*.test.ab`.
+ */
+export function isTestProgram(uri: string, text: string): boolean {
+  if (/^\s*import\s+"abla\/test"/mu.test(text)) return true;
+  const name = decodeURIComponent(uri.slice(uri.lastIndexOf("/") + 1));
+  return name === "test.ab" || name.endsWith("_test.ab") || name.endsWith(".test.ab");
+}

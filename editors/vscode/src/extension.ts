@@ -345,6 +345,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }));
   context.subscriptions.push(
+    vscode.commands.registerCommand("abla.runTest", runTest),
+    vscode.commands.registerCommand("abla.debugTest", debugTest),
     vscode.commands.registerCommand("abla.moveDeclarations", moveDeclarations),
     vscode.commands.registerCommand("abla.moveTypes", moveDeclarations),
     vscode.commands.registerCommand("abla.splitDeclarations", moveDeclarations),
@@ -378,4 +380,27 @@ export async function deactivate(): Promise<void> {
   const active = client;
   client = undefined;
   await active?.stop();
+}
+
+// The lens on a test program's main: `ablac test <file>` in a task (its output in a terminal), or the debugger on it.
+async function runTest(uri: string): Promise<void> {
+  const file = vscode.Uri.parse(uri);
+  const folder = vscode.workspace.getWorkspaceFolder(file);
+  const compiler = vscode.workspace.getConfiguration("abla").get<string>("compiler.path", "ablac");
+  const task = new vscode.Task(
+    { type: "abla-test" },
+    folder ?? vscode.TaskScope.Workspace,
+    `test ${file.path.slice(file.path.lastIndexOf("/") + 1)}`,
+    "Abla",
+    new vscode.ProcessExecution(compiler, ["test", file.fsPath], { cwd: folder?.uri.fsPath ?? file.fsPath.slice(0, file.fsPath.lastIndexOf("/")) }),
+  );
+  task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, clear: true };
+  await vscode.tasks.executeTask(task);
+}
+
+async function debugTest(uri: string): Promise<void> {
+  const file = vscode.Uri.parse(uri);
+  await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(file), {
+    type: "abla", request: "launch", name: "Debug test", program: file.fsPath,
+  });
 }

@@ -42,3 +42,22 @@ test("go to implementation and the type hierarchy follow class headers", {
   const subtypes = (await request("typeHierarchy/subtypes", { item: shape[0] })).result as Array<{ name: string }>;
   assert.deepEqual(subtypes.map((item) => item.name).sort(), ["Circle", "Square"]);
 });
+
+test("a test program's main gets run and debug lenses", {
+  skip: compiler === undefined ? "set ABLA_COMPILER to run the compiler integration gate" : false,
+  timeout: 120_000,
+}, async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-lens-"));
+  const text = 'import "abla/test"\n\nfun main: int {\n    expect(1 + 1 == 2, "sum")\n    testsPassed()\n}\n';
+  await fs.writeFile(path.join(root, "abla.toml"), 'name = "lens"\nentry = "main.ab"\n');
+  await fs.writeFile(path.join(root, "main.ab"), text);
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const uri = pathToFileURL(path.join(root, "main.ab")).href;
+  const { request } = await connect(context, root, uri, text);
+  let lenses: Array<{ range: { start: { line: number } }; command: { command: string } }> = [];
+  for (let attempt = 0; attempt < 40 && lenses.length === 0; attempt += 1) {
+    lenses = ((await request("textDocument/codeLens", { textDocument: { uri } })).result ?? []) as typeof lenses;
+    if (lenses.length === 0) await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  assert.deepEqual(lenses.map((lens) => [lens.command.command, lens.range.start.line]), [["abla.runTest", 2], ["abla.debugTest", 2]]);
+});

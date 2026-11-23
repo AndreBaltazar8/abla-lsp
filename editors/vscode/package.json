@@ -175,6 +175,14 @@
     ],
     "commands": [
       {
+        "command": "abla.runTest",
+        "title": "Abla: Run Test"
+      },
+      {
+        "command": "abla.debugTest",
+        "title": "Abla: Debug Test"
+      },
+      {
         "command": "abla.moveDeclarations",
         "title": "Abla: Move Selected Declarations to File"
       },

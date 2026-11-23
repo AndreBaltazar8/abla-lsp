@@ -52,6 +52,11 @@ command; the compiler-validated edit is computed when it is chosen (`codeAction/
 diagnostic whose single compiler fix adds a missing import or removes an unused one. Did-you-mean replacements and
 unused-local fixes stay explicit quick fixes.
 
+Also: go to implementation (an interface's classes, an interface method's overrides) and the type hierarchy
+(supertypes and subtypes from class headers), "Run test" / "Debug test" lenses on the `main` of an `abla/test`
+program (`ablac test <file>` in a task, or the debugger), and import updates when a file or folder is renamed or
+moved in the editor (`workspace/willRenameFiles`).
+
 ## Headless refactoring: abla-refactor
 
 `abla-refactor` drives the transactional engine from the command line (agents, scripts, CI): it starts the

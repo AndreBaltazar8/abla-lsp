@@ -30,6 +30,7 @@ import {
   type CallHierarchyIncomingCall,
   type CallHierarchyItem,
   type TypeHierarchyItem,
+  type CodeLens,
   type CallHierarchyOutgoingCall,
   type CodeAction,
   type Diagnostic,
@@ -58,6 +59,7 @@ import {
   signatureMarkdown,
   symbolSignature,
   importRenameEdits,
+  isTestProgram,
   inferredTypeHints,
   namedArgumentIndex,
   type CallContext,
@@ -408,6 +410,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       },
       callHierarchyProvider: true,
       typeHierarchyProvider: true,
+      codeLensProvider: { resolveProvider: false },
       implementationProvider: true,
       renameProvider: { prepareProvider: true },
       executeCommandProvider: {
@@ -1394,6 +1397,19 @@ connection.onDocumentLinks((params) => {
     });
   }
   return links;
+});
+
+// Run / debug lenses on the `main` of a test program (the client registers abla.runTest and abla.debugTest).
+connection.onCodeLens((params): CodeLens[] => {
+  const analysis = index.document(params.textDocument.uri);
+  if (analysis === undefined || !isTestProgram(analysis.uri, analysis.text)) return [];
+  const main = analysis.symbols.find((symbol) => symbol.kind === "function" && symbol.name === "main" && symbol.topLevel);
+  if (main === undefined) return [];
+  const range = new PositionMap(analysis.text).range(main.selectionRange);
+  return [
+    { range, command: { title: "$(play) Run test", command: "abla.runTest", arguments: [analysis.uri] } },
+    { range, command: { title: "$(debug) Debug test", command: "abla.debugTest", arguments: [analysis.uri] } },
+  ];
 });
 
 function typeHierarchyItem(symbol: AblaSymbol): TypeHierarchyItem | undefined {

@@ -6,6 +6,7 @@ import {
   foldingRanges,
   formatDocument,
   importRenameEdits,
+  isTestProgram,
   inferredTypeHints,
   namedArgumentIndex,
   organizeImports,
@@ -160,4 +161,11 @@ test("renaming a file rewrites the imports of its importers and its own relative
   assert.deepEqual(folder.get(importer.uri)?.map((edit) => edit.newText), ["tools/helper.ab"]);
   // Nothing to change: no edits.
   assert.equal(importRenameEdits([importer], [{ oldUri: "file:///p/other.ab", newUri: "file:///p/other2.ab" }]).size, 0);
+});
+
+test("test programs are recognised by their abla/test import or their file name", () => {
+  assert.equal(isTestProgram("file:///p/math.ab", 'import "abla/test"\nfun main: int = testsPassed()\n'), true);
+  assert.equal(isTestProgram("file:///p/math_test.ab", "fun main: int = 0\n"), true);
+  assert.equal(isTestProgram("file:///p/app.ab", 'import "abla/io"\nfun main {}\n'), false);
+  assert.equal(isTestProgram("file:///p/app.ab", '// import "abla/test"\nfun main {}\n'), false);
 });
