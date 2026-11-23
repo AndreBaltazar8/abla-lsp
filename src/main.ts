@@ -56,6 +56,7 @@ import {
   organizeImports,
   signatureMarkdown,
   symbolSignature,
+  importRenameEdits,
   inferredTypeHints,
   namedArgumentIndex,
   type CallContext,
@@ -398,6 +399,11 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         resolveProvider: true,
       },
       documentLinkProvider: { resolveProvider: false },
+      workspace: {
+        fileOperations: {
+          willRename: { filters: [{ pattern: { glob: "**/*.ab" } }, { pattern: { glob: "**", matches: "folder" } }] },
+        },
+      },
       callHierarchyProvider: true,
       renameProvider: { prepareProvider: true },
       executeCommandProvider: {
@@ -1384,6 +1390,14 @@ connection.onDocumentLinks((params) => {
     });
   }
   return links;
+});
+
+// Renaming or moving a file (or folder) in the editor rewrites the imports that name it.
+connection.workspace.onWillRenameFiles((params): WorkspaceEdit | null => {
+  const files = index.documents().filter((document) => document.uri.startsWith("file:")).map((document) => ({ uri: document.uri, text: document.text }));
+  const edits = importRenameEdits(files, params.files.map((file) => ({ oldUri: file.oldUri, newUri: file.newUri })));
+  if (edits.size === 0) return null;
+  return { changes: Object.fromEntries(edits) };
 });
 
 connection.languages.callHierarchy.onPrepare(async (params) => {

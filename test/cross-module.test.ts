@@ -57,3 +57,20 @@ test("references of a declaration list every module that uses it, whatever the i
   }
   assert.deepEqual(locations.map((location) => path.basename(new URL(location.uri).pathname)).sort(), ["lib.ab", "main.ab", "plain.ab"]);
 });
+
+test("willRenameFiles rewrites the imports of every importer", { skip, timeout: 180_000 }, async (context) => {
+  const { root, files } = await project();
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const uri = pathToFileURL(path.join(root, "main.ab")).href;
+  const { request } = await connect(context, root, uri, files["main.ab"] as string);
+  const lib = pathToFileURL(path.join(root, "lib.ab")).href;
+  const moved = pathToFileURL(path.join(root, "core", "lib2.ab")).href;
+  let changes: Record<string, Array<{ newText: string }>> = {};
+  for (let attempt = 0; attempt < 40 && Object.keys(changes).length < 2; attempt += 1) {
+    const reply = await request("workspace/willRenameFiles", { files: [{ oldUri: lib, newUri: moved }] });
+    changes = ((reply.result as { changes?: typeof changes } | null)?.changes) ?? {};
+    if (Object.keys(changes).length < 2) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  const byFile = Object.fromEntries(Object.entries(changes).map(([file, edits]) => [path.basename(new URL(file).pathname), edits.map((edit) => edit.newText)]));
+  assert.deepEqual(byFile, { "main.ab": ["core/lib2.ab"], "plain.ab": ["core/lib2.ab"] });
+});

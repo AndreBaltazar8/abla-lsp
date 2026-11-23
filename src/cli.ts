@@ -97,6 +97,9 @@ class Server {
   private id = 0;
   private stderr = "";
   private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  private compilerSettled: (() => void) | undefined;
+  /** Resolves when the server has connected to the compiler or given up on it (a request before that gets syntax-mode answers). */
+  readonly compilerReady = new Promise<void>((resolve) => { this.compilerSettled = resolve; });
 
   constructor(compiler: string | undefined) {
     const main = path.join(path.dirname(fileURLToPath(import.meta.url)), "main.js");
@@ -128,8 +131,10 @@ class Server {
         id?: number | string; method?: string; result?: unknown; error?: { message: string; code: number };
       };
       this.buffer = this.buffer.subarray(end + 4 + length);
-      if (message.method === "window/logMessage" && process.env.ABLA_REFACTOR_VERBOSE !== undefined) {
-        process.stderr.write(`server: ${(message as { params?: { message?: string } }).params?.message ?? ""}\n`);
+      if (message.method === "window/logMessage") {
+        const text = (message as { params?: { message?: string } }).params?.message ?? "";
+        if (process.env.ABLA_REFACTOR_VERBOSE !== undefined) process.stderr.write(`server: ${text}\n`);
+        if (/connected to ablac|continuing in syntax mode|compiler analysis is disabled/u.test(text)) this.compilerSettled?.();
       }
       if (message.method !== undefined) {
         // A request from the server (configuration, capability registration, progress): answer it so it never waits.
@@ -390,6 +395,7 @@ async function run(argv: readonly string[]): Promise<number> {
       initializationOptions: { compiler: { ...(options.compiler === undefined ? {} : { path: options.compiler }), ...(options.entry === undefined ? {} : { entryPoints: [options.entry] }) } },
     });
     server.notify("initialized", {});
+    await Promise.race([server.compilerReady, new Promise((resolve) => setTimeout(resolve, 60_000))]);
     let edit: WorkspaceEdit | null;
     if (command === "rename") {
       need(2, "rename <target> <newName>");

@@ -5,6 +5,7 @@ import {
   callArgumentOffsets,
   foldingRanges,
   formatDocument,
+  importRenameEdits,
   inferredTypeHints,
   namedArgumentIndex,
   organizeImports,
@@ -146,4 +147,17 @@ test("signature help follows a named argument to its parameter", () => {
   assert.equal(namedArgumentIndex(text, end, text.indexOf('"a"') + 2, labels), undefined);
   assert.equal(namedArgumentIndex('render(x == 1', 6, 13, labels), undefined);
   assert.equal(namedArgumentIndex("render(other = 1", 6, 16, labels), undefined);
+});
+
+test("renaming a file rewrites the imports of its importers and its own relative imports", () => {
+  const importer = { uri: "file:///p/main.ab", text: 'import "lib.ab"\nimport "util/helper.ab" as h\nimport "abla/json"\nfun main {}\n' };
+  const lib = { uri: "file:///p/lib.ab", text: 'import "util/helper.ab"\n' };
+  const edits = importRenameEdits([importer, lib], [{ oldUri: "file:///p/lib.ab", newUri: "file:///p/core/lib2.ab" }]);
+  assert.deepEqual(edits.get(importer.uri)?.map((edit) => edit.newText), ["core/lib2.ab"]);
+  assert.deepEqual(edits.get(lib.uri)?.map((edit) => edit.newText), ["../util/helper.ab"], "a moved file's own relative imports keep their targets");
+  // A folder rename moves everything under it.
+  const folder = importRenameEdits([importer], [{ oldUri: "file:///p/util", newUri: "file:///p/tools" }]);
+  assert.deepEqual(folder.get(importer.uri)?.map((edit) => edit.newText), ["tools/helper.ab"]);
+  // Nothing to change: no edits.
+  assert.equal(importRenameEdits([importer], [{ oldUri: "file:///p/other.ab", newUri: "file:///p/other2.ab" }]).size, 0);
 });

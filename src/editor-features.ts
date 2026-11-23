@@ -337,3 +337,56 @@ export function namedArgumentIndex(
   const index = labels.findIndex((label) => label === named[1] || label.startsWith(`${named[1]}:`) || label.startsWith(`${named[1]} `));
   return index < 0 ? undefined : index;
 }
+
+export interface FileRename { readonly oldUri: string; readonly newUri: string }
+
+/**
+ * The import-path edits a file rename or move needs (LSP `workspace/willRenameFiles`): every relative
+ * `import "path"` that names a renamed file (or a file under a renamed folder) gets the path to its new place, and a
+ * moved file's own relative imports are rewritten from its new location. Standard-library imports (`abla/...`) are
+ * left alone. Returns the edits by file URI (the file's URI before the rename).
+ */
+export function importRenameEdits(
+  files: readonly { readonly uri: string; readonly text: string }[],
+  renames: readonly FileRename[],
+): Map<string, TextEdit[]> {
+  const moved = (uri: string): string => {
+    for (const rename of renames) {
+      if (uri === rename.oldUri) return rename.newUri;
+      const folder = rename.oldUri.endsWith("/") ? rename.oldUri : `${rename.oldUri}/`;
+      if (uri.startsWith(folder)) return `${rename.newUri.replace(/\/$/u, "")}/${uri.slice(folder.length)}`;
+    }
+    return uri;
+  };
+  const relative = (from: string, to: string): string => {
+    const fromParts = new URL(".", from).pathname.split("/").filter((part) => part !== "");
+    const toParts = new URL(to).pathname.split("/").filter((part) => part !== "");
+    let shared = 0;
+    while (shared < fromParts.length && shared < toParts.length - 1 && fromParts[shared] === toParts[shared]) shared += 1;
+    const up = fromParts.slice(shared).map(() => "..");
+    return [...up, ...toParts.slice(shared)].map((part, index) => (index < up.length ? part : decodeURIComponent(part))).join("/");
+  };
+  const edits = new Map<string, TextEdit[]>();
+  const importPattern = /^(\s*import\s+(?:contract\s+)?")([^"\r\n]+)"/gmu;
+  for (const file of files) {
+    const positions = new PositionMap(file.text);
+    const newLocation = moved(file.uri);
+    for (const match of file.text.matchAll(importPattern)) {
+      const requested = match[2];
+      const matchOffset = match.index;
+      if (requested === undefined || matchOffset === undefined || match[1] === undefined) continue;
+      if (requested.startsWith("abla/") || /^[a-z][a-z0-9+.-]*:/u.test(requested)) continue;
+      let target: string;
+      try { target = new URL(requested, file.uri).href; } catch { continue; }
+      const movedTarget = moved(target);
+      if (movedTarget === target && newLocation === file.uri) continue;
+      const rewritten = relative(newLocation, movedTarget);
+      if (rewritten === requested) continue;
+      const start = matchOffset + match[1].length;
+      const list = edits.get(file.uri) ?? [];
+      list.push({ range: positions.range({ start, end: start + requested.length }), newText: rewritten });
+      edits.set(file.uri, list);
+    }
+  }
+  return edits;
+}
