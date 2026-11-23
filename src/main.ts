@@ -103,8 +103,9 @@ let compilerConfiguration: {
   readonly unusedParameters: boolean;
   readonly unusedDeclarations: boolean;
   readonly jsonConstruction: boolean;
+  readonly regexConstruction: boolean;
   readonly entryPoints?: readonly string[];
-} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true, unusedLocals: false, unusedParameters: false, unusedDeclarations: false, jsonConstruction: false };
+} = { enabled: true, path: process.env.ABLA_COMPILER ?? "ablac", unusedImports: true, unusedLocals: false, unusedParameters: false, unusedDeclarations: false, jsonConstruction: false, regexConstruction: false };
 let compiler: CompilerClient | undefined;
 let compilerRevision: string | undefined;
 let compilerSnapshot: CompilerWorkspaceSnapshot | undefined;
@@ -134,6 +135,8 @@ interface InitializationOptions {
     readonly unusedDeclarations?: boolean;
     /** Suggest standard JSON literals for hand-built JSON (off by default). */
     readonly jsonConstruction?: boolean;
+    /** Suggest $regex for regexCompile calls with a literal pattern (off by default; needs --warn-regex-construction in the compiler). */
+    readonly regexConstruction?: boolean;
     /** Project entry files (absolute paths) for a workspace whose abla.toml names none (the headless refactor driver passes --entry). */
     readonly entryPoints?: readonly string[];
   };
@@ -350,6 +353,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     unusedParameters: configured?.unusedParameters ?? false,
     unusedDeclarations: configured?.unusedDeclarations ?? false,
     jsonConstruction: configured?.jsonConstruction ?? false,
+    regexConstruction: configured?.regexConstruction ?? false,
     ...(configured?.entryPoints === undefined ? {} : { entryPoints: configured.entryPoints }),
     ...(configured?.arguments === undefined ? {} : { arguments: configured.arguments }),
   };
@@ -468,7 +472,7 @@ async function startCompiler(): Promise<void> {
   };
   let candidate = createClient();
   try {
-    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports, unusedLocals: compilerConfiguration.unusedLocals, unusedParameters: compilerConfiguration.unusedParameters, unusedDeclarations: compilerConfiguration.unusedDeclarations, jsonConstruction: compilerConfiguration.jsonConstruction, ...(compilerConfiguration.entryPoints === undefined ? {} : { entryPoints: compilerConfiguration.entryPoints }) };
+    const initialize = { workspaceRoots, clientName: "abla-lsp", clientVersion: "0.4.0", unusedImports: compilerConfiguration.unusedImports, unusedLocals: compilerConfiguration.unusedLocals, unusedParameters: compilerConfiguration.unusedParameters, unusedDeclarations: compilerConfiguration.unusedDeclarations, jsonConstruction: compilerConfiguration.jsonConstruction, regexConstruction: compilerConfiguration.regexConstruction, ...(compilerConfiguration.entryPoints === undefined ? {} : { entryPoints: compilerConfiguration.entryPoints }) };
     let initialized;
     // The newest analysis mode the compiler has: graph-v2 (stable declaration ids, analyze with since), else graph-v1. The compiler's
     // non-graph analysis (schema 1) is gone from current compilers (#832), so a compiler that refuses graph-v1 is not usable.

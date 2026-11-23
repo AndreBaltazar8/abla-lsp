@@ -83,6 +83,9 @@ The compiler's warnings arrive greyed out (the `unnecessary` tag) with quick fix
 `--warn-json-construction`, it suggests `$json` or `$jsonw` for hand-built JSON
 and offers a rewrite when the compiler can preserve the result and output bytes.
 The VS Code setting is `abla.compiler.jsonConstruction`; changing it restarts the server.
+`compiler.regexConstruction` (VS Code `abla.compiler.regexConstruction`, off by default) does the same for
+`regexCompile("literal")`: `W_REGEX_CONSTRUCTION` suggests `$regex`, with an edit for the exact `.regex` form.
+It needs a compiler with `--warn-regex-construction`.
 
 | Warning | Quick fixes |
 | --- | --- |

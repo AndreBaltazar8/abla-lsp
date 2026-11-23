@@ -272,6 +272,11 @@
           "default": false,
           "description": "Suggest standard JSON literals for clearly recognized hand-built JSON. Requires a compiler with --warn-json-construction."
         },
+        "abla.compiler.regexConstruction": {
+          "type": "boolean",
+          "default": false,
+          "description": "Suggest $regex (checked during the build) for regexCompile calls with a literal pattern, with an edit where it is exact. Requires a compiler with --warn-regex-construction."
+        },
         "abla.inlayHints.types": {
           "type": "boolean",
           "default": true,
