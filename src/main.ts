@@ -29,6 +29,7 @@ import {
   type DocumentSymbolParams,
   type CallHierarchyIncomingCall,
   type CallHierarchyItem,
+  type TypeHierarchyItem,
   type CallHierarchyOutgoingCall,
   type CodeAction,
   type Diagnostic,
@@ -62,6 +63,7 @@ import {
   type CallContext,
 } from "./editor-features.js";
 import type { AblaSymbol, DocumentAnalysis } from "./model.js";
+import { implementationsOf, subtypesOf, supertypeIds } from "./hierarchy.js";
 import { dataFixes, diagnosticData, diagnosticMessage } from "./diagnostics.js";
 import { WorkspaceIndex, type EditResult, type RenameRequest } from "./index.js";
 import { PositionMap } from "./positions.js";
@@ -405,6 +407,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         },
       },
       callHierarchyProvider: true,
+      typeHierarchyProvider: true,
+      implementationProvider: true,
       renameProvider: { prepareProvider: true },
       executeCommandProvider: {
         commands: [
@@ -1390,6 +1394,53 @@ connection.onDocumentLinks((params) => {
     });
   }
   return links;
+});
+
+function typeHierarchyItem(symbol: AblaSymbol): TypeHierarchyItem | undefined {
+  const item = callHierarchyItem(symbol);
+  return item === undefined ? undefined : { ...item, kind: symbolKind(symbol) };
+}
+
+connection.onImplementation(async (params: TextDocumentPositionParams): Promise<Location[]> => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
+  const resolved = index.resolve(params.textDocument.uri, params.position);
+  if (resolved === undefined) return [];
+  const symbol = resolved.symbol;
+  const targets = symbol.kind === "class" || symbol.kind === "interface"
+    ? subtypesOf(index.documents(), symbol.id)
+    : symbol.kind === "function" ? implementationsOf(index.documents(), symbol) : [];
+  return targets.flatMap((target) => {
+    const document = index.document(target.uri);
+    return document === undefined ? [] : [Location.create(target.uri, new PositionMap(document.text).range(target.selectionRange))];
+  });
+});
+
+connection.languages.typeHierarchy.onPrepare(async (params) => {
+  if (!(await ensureCompilerFacts(params.textDocument.uri))) return null;
+  const resolved = index.resolve(params.textDocument.uri, params.position);
+  if (resolved === undefined || (resolved.symbol.kind !== "class" && resolved.symbol.kind !== "interface")) return null;
+  const item = typeHierarchyItem(resolved.symbol);
+  return item === undefined ? null : [item];
+});
+
+connection.languages.typeHierarchy.onSupertypes(async (params) => {
+  const id = (params.item.data as { readonly id?: string } | undefined)?.id;
+  const owner = id === undefined ? undefined : index.symbolById(id);
+  if (owner === undefined) return [];
+  return supertypeIds(owner.analysis, owner.symbol).flatMap((superId) => {
+    const target = index.symbolById(superId);
+    const item = target === undefined ? undefined : typeHierarchyItem(target.symbol);
+    return item === undefined ? [] : [item];
+  });
+});
+
+connection.languages.typeHierarchy.onSubtypes(async (params) => {
+  const id = (params.item.data as { readonly id?: string } | undefined)?.id;
+  if (id === undefined) return [];
+  return subtypesOf(index.documents(), id).flatMap((symbol) => {
+    const item = typeHierarchyItem(symbol);
+    return item === undefined ? [] : [item];
+  });
 });
 
 // Renaming or moving a file (or folder) in the editor rewrites the imports that name it.
