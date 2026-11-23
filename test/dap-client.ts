@@ -72,3 +72,47 @@ export class DapClient {
     try { if (this.child.pid !== undefined) process.kill(-this.child.pid, "SIGKILL"); } catch { this.child.kill(); }
   }
 }
+
+/** The same client interface over a DapProxy (src/dap-proxy.ts) instead of a bare adapter. */
+export class ProxyClient {
+  readonly events: DapMessage[] = [];
+  private seq = 0;
+  private readonly waiting = new Map<number, (message: DapMessage) => void>();
+  private readonly listeners: Array<() => void> = [];
+
+  constructor(private readonly proxy: { send(message: any): void; onMessage(listener: (message: any) => void): void; dispose(): void }) {
+    proxy.onMessage((message: DapMessage) => {
+      if (message.type === "response" && message.request_seq !== undefined) {
+        this.waiting.get(message.request_seq)?.(message);
+        this.waiting.delete(message.request_seq);
+      } else if (message.type === "event") {
+        this.events.push(message);
+        for (const listener of this.listeners.splice(0)) listener();
+      }
+    });
+  }
+
+  request(command: string, args: object = {}): Promise<DapMessage> {
+    const seq = ++this.seq;
+    return new Promise((resolve) => {
+      this.waiting.set(seq, resolve);
+      this.proxy.send({ seq, type: "request", command, arguments: args });
+    });
+  }
+
+  async event(name: string, timeoutMs = 30_000): Promise<DapMessage> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const at = this.events.findIndex((event) => event.event === name);
+      if (at >= 0) return this.events.splice(at, 1)[0] as DapMessage;
+      const left = deadline - Date.now();
+      if (left <= 0) throw new Error(`no ${name} event within ${timeoutMs} ms`);
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, left);
+        this.listeners.push(() => { clearTimeout(timer); resolve(); });
+      });
+    }
+  }
+
+  stop(): void { this.proxy.dispose(); }
+}

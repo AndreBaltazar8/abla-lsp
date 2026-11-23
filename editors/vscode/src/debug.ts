@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { spawnSync } from "node:child_process";
 import { ablaGdbArguments, ablaLldbCommands, isRuntimeFrame } from "../../../src/debugger-commands";
+import { DapProxy } from "../../../src/dap-proxy";
 
 // Debugging an Abla program: the `abla` debug type builds it as a development build (`ablac build -g --fast`, whose
 // DWARF has every function's parameters and locals with their Abla types) and hands the executable to lldb-dap
@@ -9,6 +10,14 @@ import { ablaGdbArguments, ablaLldbCommands, isRuntimeFrame } from "../../../src
 const lldbDapExtension = "llvm-vs-code-extensions.lldb-dap";
 
 export { ablaLldbCommands };
+
+// The lldb-dap executable: the `abla.debug.lldbDapPath` setting, else `lldb-dap` on the PATH, else none.
+function lldbDapExecutable(): string | undefined {
+  const configured = vscode.workspace.getConfiguration("abla").get<string>("debug.lldbDapPath", "");
+  const candidate = configured === "" ? "lldb-dap" : configured;
+  const result = spawnSync(candidate, ["--help"], { encoding: "utf8" });
+  return result.error === undefined && result.status === 0 ? candidate : undefined;
+}
 
 // Whether `gdb` exists and has the DAP mode (gdb 14 or newer).
 function gdbHasDap(): boolean {
@@ -97,7 +106,10 @@ export class AblaDebugConfigurationProvider implements vscode.DebugConfiguration
     }
     // The debugger: lldb-dap (the "LLDB DAP" extension) with Abla value formatters, else gdb's DAP mode.
     const setting = vscode.workspace.getConfiguration("abla").get<string>("debug.engine", "auto");
-    const haveLldb = vscode.extensions.getExtension(lldbDapExtension) !== undefined;
+    // With an lldb-dap executable the Abla adapter (src/dap-proxy.ts) wraps it and shows arrays and null optionals;
+    // with only the LLDB DAP extension its adapter runs as it is.
+    const executable_ = lldbDapExecutable();
+    const haveLldb = executable_ !== undefined || vscode.extensions.getExtension(lldbDapExtension) !== undefined;
     const engine = setting === "lldb" || (setting === "auto" && haveLldb) ? "lldb" : setting === "gdb" || gdbHasDap() ? "gdb" : "lldb";
     if (engine === "lldb" && !haveLldb) {
       void vscode.window.showErrorMessage(
@@ -128,10 +140,12 @@ export class AblaDebugConfigurationProvider implements vscode.DebugConfiguration
         ...(configuration.env === undefined ? {} : { env: configuration.env }),
       };
     }
-    // A configuration of another type is resolved again by that type's provider: lldb-dap's.
+    // Our own adapter wraps the lldb-dap executable; else the configuration is resolved again by the LLDB DAP
+    // extension's provider (its adapter shows arrays as a pointer).
     return {
       ablaSkipRuntime: true,
-      type: "lldb-dap",
+      ablaLldbDap: executable_,
+      type: executable_ === undefined ? "lldb-dap" : "abla-lldb",
       request: "launch",
       name: configuration.name,
       program: executable,
@@ -176,14 +190,36 @@ class RuntimeSkipTracker implements vscode.DebugAdapterTracker {
   }
 }
 
+/** The Abla adapter: lldb-dap behind the DAP proxy, as an editor debug adapter. */
+class ProxyAdapter implements vscode.DebugAdapter {
+  private readonly emitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
+  readonly onDidSendMessage = this.emitter.event;
+  private readonly proxy: DapProxy;
+
+  constructor(executable: string) {
+    this.proxy = new DapProxy(executable);
+    this.proxy.onMessage((message) => this.emitter.fire(message as unknown as vscode.DebugProtocolMessage));
+  }
+
+  handleMessage(message: vscode.DebugProtocolMessage): void { this.proxy.send(message as never); }
+
+  dispose(): void {
+    this.proxy.dispose();
+    this.emitter.dispose();
+  }
+}
+
 export function registerDebugging(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider("abla", new AblaDebugConfigurationProvider()),
     vscode.debug.registerDebugAdapterDescriptorFactory("abla-gdb", {
       createDebugAdapterDescriptor: () => new vscode.DebugAdapterExecutable("gdb", [...ablaGdbArguments]),
     }),
-    vscode.debug.registerDebugAdapterTrackerFactory("lldb-dap", {
-      createDebugAdapterTracker: (session) => session.configuration.ablaSkipRuntime === true ? new RuntimeSkipTracker(session) : undefined,
+    vscode.debug.registerDebugAdapterDescriptorFactory("abla-lldb", {
+      createDebugAdapterDescriptor: (session) => new vscode.DebugAdapterInlineImplementation(new ProxyAdapter(String(session.configuration.ablaLldbDap))),
     }),
+    ...["lldb-dap", "abla-lldb"].map((type) => vscode.debug.registerDebugAdapterTrackerFactory(type, {
+      createDebugAdapterTracker: (session) => session.configuration.ablaSkipRuntime === true ? new RuntimeSkipTracker(session) : undefined,
+    })),
   );
 }

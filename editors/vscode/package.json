@@ -46,6 +46,13 @@
     ],
     "debuggers": [
       {
+        "type": "abla-lldb",
+        "label": "Abla (lldb-dap)",
+        "languages": [
+          "abla"
+        ]
+      },
+      {
         "type": "abla-gdb",
         "label": "Abla (gdb)",
         "languages": [
@@ -274,6 +281,11 @@
           "enum": ["auto", "lldb", "gdb"],
           "default": "auto",
           "description": "The debugger behind the abla debug type: lldb-dap (with Abla value formatters; needs the LLDB DAP extension) or gdb 14+ (DAP mode; frames, breakpoints and stepping, without formatted values). auto prefers lldb-dap."
+        },
+        "abla.debug.lldbDapPath": {
+          "type": "string",
+          "default": "",
+          "description": "The lldb-dap executable (default: lldb-dap on the PATH). With it, Abla debugging shows arrays by their elements and null optionals as null; without it the LLDB DAP extension's adapter is used."
         },
         "abla.compiler.enabled": {
           "type": "boolean",
