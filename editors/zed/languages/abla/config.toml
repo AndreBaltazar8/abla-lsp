@@ -1,4 +1,5 @@
 name = "Abla"
+grammar = "abla"
 path_suffixes = ["ab"]
 line_comments = ["// ", "/// "]
 block_comment = ["/* ", " */"]

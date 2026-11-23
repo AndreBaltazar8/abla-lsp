@@ -9,3 +9,7 @@ repository = "https://github.com/AndreBaltazar8/abla-lsp"
 [language_servers.abla-lsp]
 name = "abla-lsp"
 languages = ["Abla"]
+
+[grammars.abla]
+repository = "https://github.com/AndreBaltazar8/tree-sitter-abla"
+rev = "a1475678023aae1f4868e236f001742cd3fe0c3c"

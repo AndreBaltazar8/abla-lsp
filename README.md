@@ -109,15 +109,22 @@ Ready-made configurations live in `editors/`. Each needs `abla-lsp` (this packag
 
 - **Neovim 0.11+** (`editors/neovim`): add the directory to `runtimepath`, then
   `require("abla").setup({ cmd = { "abla-lsp", "--stdio" } })`. It registers the `.ab` filetype, a regex-based
-  syntax file (no tree-sitter), comment and indent settings and the `vim.lsp.config("abla")` client rooted at
-  `abla.toml`, `abla.lock` or `.git`. `editors/neovim/lsp-abla.lua` holds the nvim-lspconfig form.
-- **Helix** (`editors/helix/languages.toml`): append it to `~/.config/helix/languages.toml`. Check with
-  `hx --health abla`. Helix has no Abla tree-sitter grammar yet, so there is no highlighting, only the language server.
-- **Zed** (`editors/zed`): a dev extension (`zed: install dev extension`) that starts `abla-lsp --stdio`. It is a
-  Rust extension (`cargo check` builds it); there is no tree-sitter grammar yet, so no highlighting.
+  syntax file, comment and indent settings and the `vim.lsp.config("abla")` client rooted at `abla.toml`,
+  `abla.lock` or `.git`. `editors/neovim/lsp-abla.lua` holds the nvim-lspconfig form. With the
+  [tree-sitter-abla](https://github.com/AndreBaltazar8/tree-sitter-abla) parser installed (`vim.treesitter.language.add("abla", { path = "abla.so" })`
+  or nvim-treesitter), `editors/neovim/queries/abla` gives highlights, indents, text objects and locals;
+  `vim.treesitter.start()` turns them on.
+- **Helix** (`editors/helix`): append `languages.toml` to `~/.config/helix/languages.toml` (it declares the
+  tree-sitter-abla grammar and the `abla-lsp` server), copy `queries/abla` to `~/.config/helix/runtime/queries/abla`
+  and run `hx --grammar fetch && hx --grammar build`. Check with `hx --health abla`.
+- **Zed** (`editors/zed`): a dev extension (`zed: install dev extension`) that starts `abla-lsp --stdio`; its
+  `extension.toml` pulls the tree-sitter-abla grammar at the pinned `rev`, and `languages/abla` holds the queries
+  (highlights, indents, brackets, outline, text objects). It is a Rust extension (`cargo check` builds it).
 
 `npm run test:editors` (also part of `npm run validate`) attaches Neovim headlessly to the server and requires a hover
-on a fixture, and runs `hx --health abla` against the Helix config. A missing editor is skipped.
+on a fixture, loads the tree-sitter-abla parser (a sibling checkout, built with `cc`) and requires highlight captures
+from the Neovim queries, and runs `hx --health abla` against the Helix config, which must find the highlight, text
+object and indent queries. A missing editor is skipped.
 
 ## Development
 

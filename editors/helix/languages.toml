@@ -1,5 +1,6 @@
 # Append to ~/.config/helix/languages.toml (or a project's .helix/languages.toml).
 # Needs `abla-lsp` (npm package) and `ablac` on PATH; set ABLA_COMPILER to use another compiler.
+# Copy queries/abla/*.scm to ~/.config/helix/runtime/queries/abla/ and run `hx --grammar fetch && hx --grammar build`.
 
 [language-server.abla-lsp]
 command = "abla-lsp"
@@ -14,3 +15,8 @@ comment-tokens = ["//", "///"]
 block-comment-tokens = [{ start = "/*", end = "*/" }]
 indent = { tab-width = 2, unit = "  " }
 language-servers = ["abla-lsp"]
+grammar = "abla"
+
+[[grammar]]
+name = "abla"
+source = { git = "https://github.com/AndreBaltazar8/tree-sitter-abla", rev = "master" }
