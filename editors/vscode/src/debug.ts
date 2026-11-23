@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { spawnSync } from "node:child_process";
+import { ablaGdbArguments, ablaLldbCommands, isRuntimeFrame } from "../../../src/debugger-commands";
 
 // Debugging an Abla program: the `abla` debug type builds it as a development build (`ablac build -g --fast`, whose
 // DWARF has every function's parameters and locals with their Abla types) and hands the executable to lldb-dap
@@ -6,11 +8,13 @@ import * as vscode from "vscode";
 
 const lldbDapExtension = "llvm-vs-code-extensions.lldb-dap";
 
-// lldb summary strings (no Python): a string shows its text, an array its length.
-export const ablaLldbCommands = [
-  'type summary add --summary-string "${var.data%s}" string',
-  'type summary add --summary-string "length ${var.length}" -x "^array<"',
-];
+export { ablaLldbCommands };
+
+// Whether `gdb` exists and has the DAP mode (gdb 14 or newer).
+function gdbHasDap(): boolean {
+  const result = spawnSync("gdb", ["--version"], { encoding: "utf8" });
+  return result.status === 0 && /GNU gdb.* (1[4-9]|[2-9][0-9])\./u.test(result.stdout);
+}
 
 // The directory and the name without `.ab` of a path (either separator).
 function directoryOf(file: string): string {
@@ -91,9 +95,13 @@ export class AblaDebugConfigurationProvider implements vscode.DebugConfiguration
       void vscode.window.showErrorMessage("Abla debugging: set `program` to a .ab file or a project directory.");
       return undefined;
     }
-    if (vscode.extensions.getExtension(lldbDapExtension) === undefined) {
+    // The debugger: lldb-dap (the "LLDB DAP" extension) with Abla value formatters, else gdb's DAP mode.
+    const setting = vscode.workspace.getConfiguration("abla").get<string>("debug.engine", "auto");
+    const haveLldb = vscode.extensions.getExtension(lldbDapExtension) !== undefined;
+    const engine = setting === "lldb" || (setting === "auto" && haveLldb) ? "lldb" : setting === "gdb" || gdbHasDap() ? "gdb" : "lldb";
+    if (engine === "lldb" && !haveLldb) {
       void vscode.window.showErrorMessage(
-        `Abla debugging runs the program under lldb-dap: install the "LLDB DAP" extension (${lldbDapExtension}).`);
+        `Abla debugging runs the program under lldb-dap: install the "LLDB DAP" extension (${lldbDapExtension}), or use gdb 14 or newer.`);
       return undefined;
     }
     if (attaching) return attachConfiguration(configuration);
@@ -108,8 +116,21 @@ export class AblaDebugConfigurationProvider implements vscode.DebugConfiguration
       void vscode.window.showErrorMessage("Abla debugging: the build failed (see its terminal).");
       return undefined;
     }
+    if (engine === "gdb") {
+      // gdb has no Abla value formatters (they would need its Python): frames, breakpoints and stepping.
+      return {
+        type: "abla-gdb",
+        request: "launch",
+        name: configuration.name,
+        program: executable,
+        args: Array.isArray(configuration.args) ? configuration.args : [],
+        cwd,
+        ...(configuration.env === undefined ? {} : { env: configuration.env }),
+      };
+    }
     // A configuration of another type is resolved again by that type's provider: lldb-dap's.
     return {
+      ablaSkipRuntime: true,
       type: "lldb-dap",
       request: "launch",
       name: configuration.name,
@@ -123,8 +144,46 @@ export class AblaDebugConfigurationProvider implements vscode.DebugConfiguration
   }
 }
 
+/**
+ * lldb-dap's stepIn ignores lldb's step-avoid-regexp, so a step that lands in a runtime function (a string
+ * concatenation, say) steps out and steps in again until it reaches Abla code, as gdb's `skip` does by itself.
+ */
+class RuntimeSkipTracker implements vscode.DebugAdapterTracker {
+  private phase: "idle" | "out" | "in" = "idle";
+  private guard = 0;
+
+  constructor(private readonly session: vscode.DebugSession) {}
+
+  onDidSendMessage(message: { type?: string; event?: string; body?: { reason?: string; threadId?: number } }): void {
+    if (message.type !== "event" || message.event !== "stopped") return;
+    const threadId = message.body?.threadId;
+    if (threadId === undefined) return;
+    if (this.phase === "out") {
+      this.phase = "in";
+      void this.session.customRequest("stepIn", { threadId });
+      return;
+    }
+    if (this.phase === "idle" && message.body?.reason !== "step") return;
+    this.phase = "idle";
+    void this.session.customRequest("stackTrace", { threadId, levels: 1 }).then((reply: { stackFrames?: Array<{ name?: string }> }) => {
+      const name = reply.stackFrames?.[0]?.name ?? "";
+      if (isRuntimeFrame(name) && this.guard < 50) {
+        this.guard += 1;
+        this.phase = "out";
+        void this.session.customRequest("stepOut", { threadId });
+      } else this.guard = 0;
+    });
+  }
+}
+
 export function registerDebugging(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider("abla", new AblaDebugConfigurationProvider()),
+    vscode.debug.registerDebugAdapterDescriptorFactory("abla-gdb", {
+      createDebugAdapterDescriptor: () => new vscode.DebugAdapterExecutable("gdb", [...ablaGdbArguments]),
+    }),
+    vscode.debug.registerDebugAdapterTrackerFactory("lldb-dap", {
+      createDebugAdapterTracker: (session) => session.configuration.ablaSkipRuntime === true ? new RuntimeSkipTracker(session) : undefined,
+    }),
   );
 }

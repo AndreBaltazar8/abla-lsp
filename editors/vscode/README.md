@@ -40,6 +40,11 @@ fields, an array's length and elements.
 
 `program` may also be a project directory (built with `--project`).
 
+Stepping stays in Abla source: a step in that lands in a runtime function (a string concatenation, say) steps out and in
+again until it reaches Abla code. `abla.debug.engine` chooses the debugger: `lldb` (the default when the LLDB DAP
+extension is installed) shows strings as their text and arrays as `length N`; `gdb` (gdb 14 or newer, its DAP mode)
+is the fallback where lldb-dap is missing and shows frames, breakpoints and stepping, but not formatted values.
+
 To debug a program that is already running (or starts later), attach to it. `program` is the executable built with
 `ablac build -g` (it is not built for an attach), so the debugger has the Abla types:
 
