@@ -128,7 +128,7 @@ object and indent queries. A missing editor is skipped.
 
 ## Development
 
-Node.js 20 or newer and Abla 0.2.46 or newer with analysis protocol version 1
+Node.js 20 or newer and Abla 0.2.68 or newer (the version CI tests against) with analysis protocol version 1
 are required for the complete semantic and new-file refactor feature set.
 
 ```sh

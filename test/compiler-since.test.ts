@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import test from "node:test";
@@ -20,7 +21,9 @@ async function session(context: { after: (hook: () => Promise<void>) => void }, 
     .filter((message) => message.method === "analyze");
   return { client, analyzes };
 }
-const uri = (name: string) => `file:///workspace/${name}`;
+// A workspace directory that is absolute on every host (a `file:///workspace/...` URI has no drive letter, which Windows refuses).
+const workspaceRoot = path.resolve("/workspace");
+const uri = (name: string) => pathToFileURL(path.join(workspaceRoot, name)).href;
 const open = (client: CompilerClient, name: string, text: string, version = 1) => client.open({ uri: uri(name), version, text });
 const summary = (snapshot: CompilerWorkspaceSnapshot) => snapshot.documents.map((d) => `${d.uri.slice(uri("").length)}@${d.version}:${d.text}`);
 
@@ -106,7 +109,7 @@ test("graph-v2: the workspace works on the merged snapshot", async (context) => 
   const { client } = await session(context);
   const initialized = await client.start({ workspaceRoots: [], clientName: "t", clientVersion: "0", analysisMode: "graph-v2" });
   const accepted: CompilerWorkspaceSnapshot[] = [];
-  const workspace = new CompilerWorkspace(client, { roots: ["/workspace"], capabilities: initialized.capabilities, accept: (snapshot) => accepted.push(snapshot) });
+  const workspace = new CompilerWorkspace(client, { roots: [workspaceRoot], capabilities: initialized.capabilities, accept: (snapshot) => accepted.push(snapshot) });
   assert.equal(workspace.stableIds, true);
   await workspace.update("open", { uri: uri("a.ab"), version: 1, text: "fun target(): int = 1\n" });
   const first = await workspace.ensure(uri("a.ab"), true, true);
