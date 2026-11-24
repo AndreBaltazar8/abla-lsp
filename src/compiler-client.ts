@@ -1,5 +1,6 @@
 import type { AblaSymbol } from "./model.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { analysisEnvironment, compilerVersionText } from "./compiler-environment.js";
 import { createInterface } from "node:readline";
 import {
   compilerProtocolVersion,
@@ -74,12 +75,17 @@ export class CompilerClient {
     this.#sourceRevision = undefined;
     this.#sources.clear();
     this.#since = false; this.#held.clear(); this.#heldRevision = undefined; this.#heldFields = undefined;
+    // On macOS a compiler before 0.2.69 faults at its first freeze: it is started with the freeze off (src/compiler-environment.ts), for every user of this client.
+    const platformEnvironment = process.platform === "darwin"
+      ? analysisEnvironment(process.platform, compilerVersionText(this.#options.executable), { ...process.env, ...this.#options.environment })
+      : {};
+    if (platformEnvironment.ABLA_ANALYSIS_FREEZE !== undefined) this.#options.log?.("macOS: this ablac is older than 0.2.69: starting it with ABLA_ANALYSIS_FREEZE=0");
     const child = spawn(
       this.#options.executable,
       [...(this.#options.arguments ?? ["analyze", "--stdio"])],
       {
         cwd: this.#options.cwd,
-        env: { ...process.env, ...this.#options.environment },
+        env: { ...process.env, ...platformEnvironment, ...this.#options.environment },
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
