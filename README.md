@@ -52,6 +52,10 @@ command; the compiler-validated edit is computed when it is chosen (`codeAction/
 diagnostic whose single compiler fix adds a missing import or removes an unused one. Did-you-mean replacements and
 unused-local fixes stay explicit quick fixes.
 
+In a call such as `send(name =)`, the quick fix fills in `name = name` at the
+missing-expression diagnostic. The inserted value must be in scope and have
+the parameter's type.
+
 Also: go to implementation (an interface's classes, an interface method's overrides) and the type hierarchy
 (supertypes and subtypes from class headers), "Run test" / "Debug test" lenses on the `main` of an `abla/test`
 program (`ablac test <file>` in a task, or the debugger), and import updates when a file or folder is renamed or

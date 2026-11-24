@@ -338,6 +338,25 @@ export function namedArgumentIndex(
   return index < 0 ? undefined : index;
 }
 
+/** Locate a named argument with an omitted value and its closing delimiter. */
+export function missingNamedArgument(
+  text: string,
+  start: number,
+  end: number,
+): { readonly name: string; readonly offset: number; readonly delimiter: number } | undefined {
+  const call = callContext(text, start);
+  if (call === undefined) return undefined;
+  const argument = callArgumentOffsets(text, call.nameOffset + call.name.length)[call.activeParameter];
+  if (argument === undefined || start < argument) return undefined;
+  const missing = /^([A-Za-z_][A-Za-z0-9_]*)(\s*=)\s*(?=[,)])/u.exec(text.slice(argument));
+  if (missing === null) return undefined;
+  const delimiter = argument + missing[0].length;
+  if (end > delimiter + 1) return undefined;
+  const [, name, assignment] = missing;
+  if (name === undefined || assignment === undefined) return undefined;
+  return { name, offset: argument + name.length + assignment.length, delimiter };
+}
+
 export interface FileRename { readonly oldUri: string; readonly newUri: string }
 
 /**

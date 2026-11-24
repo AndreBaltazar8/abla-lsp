@@ -61,6 +61,7 @@ import {
   importRenameEdits,
   isTestProgram,
   inferredTypeHints,
+  missingNamedArgument,
   namedArgumentIndex,
   type CallContext,
 } from "./editor-features.js";
@@ -1205,12 +1206,27 @@ connection.onCodeAction(async (params) => {
   if (analysis === undefined) return [];
   const actions: CodeAction[] = [];
   if (
-    semanticActions && analysis.authority === "compiler" &&
+    analysis.authority === "compiler" &&
     (params.context.only === undefined ||
       params.context.only.some((kind) => CodeActionKind.QuickFix.startsWith(kind)))
   ) {
     const positions = new PositionMap(analysis.text);
-    for (const diagnostic of params.context.diagnostics) {
+    // This repairs a parser error, for which the compiler graph is incomplete.
+    // The diagnostic anchors the insertion at the missing value's delimiter.
+    const missingExpressions = analysis.diagnostics.filter((diagnostic) => diagnostic.code === "E_PARSE_EXPRESSION");
+    if (missingExpressions.length > 0 && documents.get(analysis.uri)?.getText() === analysis.text &&
+        (workspaceRoots.length === 0 || ownedSource(analysis.uri, workspaceRoots))) {
+      const missing = missingNamedArgument(analysis.text, positions.offset(params.range.start), positions.offset(params.range.end));
+      if (missing !== undefined && missingExpressions.some((diagnostic) => diagnostic.range.start === missing.delimiter)) {
+        const at = positions.position(missing.offset);
+        actions.push({
+          title: `Fill named argument with '${missing.name}'`,
+          kind: CodeActionKind.QuickFix,
+          edit: { changes: { [analysis.uri]: [{ range: { start: at, end: at }, newText: ` ${missing.name}` }] } },
+        });
+      }
+    }
+    for (const diagnostic of semanticActions ? params.context.diagnostics : []) {
       if (diagnostic.source !== "ablac") continue;
       // The compiler's own fixes (a did-you-mean, a missing import) come as edits in the diagnostic's data.
       const given = dataFixes(diagnostic.data);

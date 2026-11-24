@@ -9,6 +9,52 @@ import { connect } from "./lsp-client.js";
 
 const compiler = process.env.ABLA_COMPILER;
 
+test("quick fix fills a missing named argument from the same-name binding", {
+  skip: compiler === undefined ? "set ABLA_COMPILER to run the compiler integration gate" : false,
+  timeout: 120_000,
+}, async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-named-argument-"));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const text = [
+    "fun send(name: string): int = name.size",
+    "fun main: int {",
+    '    val name = "Abla"',
+    "    send(name =)",
+    "}",
+    "",
+  ].join("\n");
+  await fs.writeFile(path.join(root, "abla.toml"), 'name = "named-argument"\nentry = "main.ab"\n');
+  await fs.writeFile(path.join(root, "main.ab"), text);
+  const uri = pathToFileURL(path.join(root, "main.ab")).href;
+  const { request } = await connect(context, root, uri, text);
+  const position = { line: 3, character: 15 };
+  let actions: unknown;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const reply = await request("textDocument/codeAction", {
+      textDocument: { uri },
+      range: { start: position, end: position },
+      context: { diagnostics: [], only: ["quickfix"] },
+    });
+    assert.equal(reply.error, undefined, JSON.stringify(reply));
+    actions = reply.result;
+    if (Array.isArray(actions) && actions.length > 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  assert.deepEqual(actions, [{
+    title: "Fill named argument with 'name'",
+    kind: "quickfix",
+    edit: { changes: { [uri]: [{ range: { start: position, end: position }, newText: " name" }] } },
+  }]);
+  const elsewhere = { line: 2, character: 8 };
+  const unrelated = await request("textDocument/codeAction", {
+    textDocument: { uri },
+    range: { start: elsewhere, end: elsewhere },
+    context: { diagnostics: [], only: ["quickfix"] },
+  });
+  assert.deepEqual(unrelated.result, []);
+  await request("shutdown", null);
+});
+
 test("refactor code actions are offered at the cursor and resolve to compiler-validated edits", {
   skip: compiler === undefined ? "set ABLA_COMPILER to run the compiler integration gate" : false,
   timeout: 120_000,
