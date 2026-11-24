@@ -46,6 +46,7 @@ import {
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { CompilerClient, CompilerProtocolError } from "./compiler-client.js";
+import { analysisEnvironment, compilerVersionText } from "./compiler-environment.js";
 import { CompilerWorkspace, SupersededAnalysis, ownedSource, compilerLocalUri } from "./compiler-workspace.js";
 import { compilerUriKey } from "./encoding.js";
 import type { CompilerWorkspaceSnapshot, CompilerPendingDiagnostic, CompilerQueryMethod, CompilerHover, CompilerLocation } from "./compiler-protocol.js";
@@ -467,8 +468,14 @@ connection.onInitialized(() => {
 
 async function startCompiler(): Promise<void> {
   const createClient = (): CompilerClient => {
+    // On macOS a compiler before 0.2.69 faults at its first freeze: the analysis service is started with the freeze off (src/compiler-environment.ts).
+    const environment = process.platform === "darwin"
+      ? analysisEnvironment(process.platform, compilerVersionText(compilerConfiguration.path), process.env)
+      : {};
+    if (environment.ABLA_ANALYSIS_FREEZE !== undefined) connection.console.info("macOS: this ablac is older than 0.2.69: starting it with ABLA_ANALYSIS_FREEZE=0");
     const child = new CompilerClient({
       executable: compilerConfiguration.path,
+      environment,
       ...(compilerConfiguration.arguments === undefined ? {} : { arguments: compilerConfiguration.arguments }),
       log: (message) => connection.console.info(`ablac analyze: ${message}`),
       onExit: (error) => {
