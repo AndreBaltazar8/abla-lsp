@@ -24,6 +24,13 @@
     "onDebugDynamicConfigurations:abla"
   ],
   "main": "./dist/extension.cjs",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In a workspace that is not trusted the language server analyzes the code (parsing and type checking; the compiler's analysis service runs no compile-time code, fetches and writes nothing) but building, testing and debugging are off.",
+      "restrictedConfigurations": ["abla.server.path", "abla.compiler.path", "abla.debug.lldbDapPath"]
+    }
+  },
   "extensionDependencies": [
     "andrebaltazar8.abla-tmlanguage"
   ],
@@ -276,11 +283,13 @@
       "properties": {
         "abla.server.path": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "Optional path to an external abla-lsp executable. Leave empty to use the language server bundled with this extension."
         },
         "abla.compiler.path": {
           "type": "string",
+          "scope": "machine",
           "default": "ablac",
           "description": "Path to the ablac executable used for semantic analysis."
         },
@@ -292,6 +301,7 @@
         },
         "abla.debug.lldbDapPath": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "The lldb-dap executable (default: lldb-dap on the PATH). With it, Abla debugging shows arrays by their elements and null optionals as null; without it the LLDB DAP extension's adapter is used."
         },

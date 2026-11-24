@@ -1,4 +1,4 @@
-# Append to ~/.config/helix/languages.toml (or a project's .helix/languages.toml).
+# Append to ~/.config/helix/languages.toml. (A project's own .helix/languages.toml can name any command for a language server, so put this in your user file and open only projects you trust: abla-lsp and ablac are found on PATH or through ABLA_COMPILER, never from a project file.)
 # Needs `abla-lsp` (npm package) and `ablac` on PATH; set ABLA_COMPILER to use another compiler.
 # Copy queries/abla/*.scm to ~/.config/helix/runtime/queries/abla/ and run `hx --grammar fetch && hx --grammar build`.
 

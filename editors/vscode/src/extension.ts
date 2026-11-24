@@ -384,6 +384,10 @@ export async function deactivate(): Promise<void> {
 
 // The lens on a test program's main: `ablac test <file>` in a task (its output in a terminal), or the debugger on it.
 async function runTest(uri: string): Promise<void> {
+  if (!vscode.workspace.isTrusted) {
+    void vscode.window.showErrorMessage("Abla: running tests builds the project, which runs its compile-time code; trust this workspace first.");
+    return;
+  }
   const file = vscode.Uri.parse(uri);
   const folder = vscode.workspace.getWorkspaceFolder(file);
   const compiler = vscode.workspace.getConfiguration("abla").get<string>("compiler.path", "ablac");

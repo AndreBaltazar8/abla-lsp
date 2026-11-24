@@ -38,6 +38,7 @@ function stemOf(file: string): string {
 
 // Runs the build as a task (its output in a terminal) and gives its exit code.
 async function build(compiler: string, args: string[], cwd: string): Promise<number> {
+  if (!vscode.workspace.isTrusted) return 1; // building runs the project's compile-time code: only in a trusted workspace
   const task = new vscode.Task(
     { type: "abla-debug-build" },
     vscode.TaskScope.Workspace,

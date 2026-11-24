@@ -17,6 +17,14 @@ interface and missing-declaration generation, ownership repair, compile-time
 migration, dead-code removal, and same-snapshot or staged JSON refactor recipes.
 Semantic edits are applied only after prospective compiler validation.
 
+## Workspace trust
+
+The settings that name an executable (`abla.compiler.path`, `abla.server.path`, `abla.debug.lldbDapPath`) are machine-scoped:
+they are read from your user settings only, so a project's own `.vscode/settings.json` cannot make the extension run a binary
+it ships. In an untrusted workspace (Restricted Mode) the extension analyzes the code (the compiler's analysis service runs no
+compile-time code, fetches nothing and writes nothing) and leaves building, testing and debugging off; those run the
+project's compile-time code, so trust the folder first.
+
 ## Debugging
 
 Breakpoints can be set in `.ab` files, and the `abla` debug type runs a program
