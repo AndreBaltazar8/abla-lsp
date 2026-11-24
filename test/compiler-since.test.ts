@@ -23,7 +23,7 @@ async function session(context: { after: (hook: () => Promise<void>) => void }, 
 }
 // A workspace directory that is absolute on every host (a `file:///workspace/...` URI has no drive letter, which Windows refuses).
 const workspaceRoot = path.resolve("/workspace");
-const uri = (name: string) => pathToFileURL(path.join(workspaceRoot, name)).href;
+const uri = (name: string) => `${pathToFileURL(workspaceRoot).href}/${name}`;
 const open = (client: CompilerClient, name: string, text: string, version = 1) => client.open({ uri: uri(name), version, text });
 const summary = (snapshot: CompilerWorkspaceSnapshot) => snapshot.documents.map((d) => `${d.uri.slice(uri("").length)}@${d.version}:${d.text}`);
 
