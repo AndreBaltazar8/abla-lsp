@@ -278,3 +278,37 @@ test('real graph LSP cannot rename imported sources outside owned workspace, inc
     assert.equal(await fs.readFile(library, 'utf8'), 'fun externalAnswer: int = 42\n');
   }
 });
+
+// A move or an extraction names a target file by URI. Where the compiler's edit would create that file is the server's to refuse when it is outside the workspace
+// roots (an absolute path, or through a link inside them): the edit a client then applies must not create or write anything outside (#1139 programme).
+test('real graph LSP refuses to create the target of a move or an extraction outside the workspace, directly or through a link', {
+  skip: real === undefined ? 'set ABLA_COMPILER_GRAPH' : false, timeout: 90000,
+}, async context => {
+  const f = await fixture();
+  const external = await fs.mkdtemp(path.join(os.tmpdir(), 'abla-lsp-external-'));
+  await fs.symlink(external, path.join(f.root, 'linked'));
+  const server = new Server();
+  context.after(async () => {
+    await server.stop().catch(() => undefined);
+    await fs.rm(f.root, { recursive: true, force: true });
+    await fs.rm(external, { recursive: true, force: true });
+  });
+  const text = 'fun helper(): int = 1\nfun main: int = helper()\n';
+  await fs.writeFile(f.file, text);
+  await server.start(f.root, { path: real ?? 'ablac' });
+  server.notify('textDocument/didOpen', { textDocument: { uri: f.uri, languageId: 'abla', version: 1, text } });
+  const move = (target: string) => server.request('workspace/executeCommand', {
+    command: 'abla.moveDeclarations',
+    arguments: [{ selections: [{ uri: f.uri, position: { line: 0, character: 5 } }], targetUri: pathToFileURL(target).href, createTarget: true }],
+  });
+  // The control: a target inside the workspace is planned (so the command works at all in this test).
+  const inside = await move(path.join(f.root, 'moved.ab'));
+  assert.equal(inside.error, undefined, JSON.stringify(inside.error));
+  assert.match(JSON.stringify(inside.result), /moved\.ab/);
+  for (const target of [path.join(external, 'moved.ab'), path.join(f.root, 'linked', 'moved.ab'), path.join(f.root, 'linked', 'deeper', 'moved.ab')]) {
+    const refused = await move(target);
+    assert.match(refused.error?.message ?? '', /outside|symlink|owned/i, `${target}: ${JSON.stringify(refused)}`);
+    assert.deepEqual(await fs.readdir(external), [], `${target}: something was written outside the workspace`);
+  }
+  assert.equal(await fs.readFile(f.file, 'utf8'), text);
+});
