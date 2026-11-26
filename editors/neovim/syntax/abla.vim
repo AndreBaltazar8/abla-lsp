@@ -15,6 +15,7 @@ syn match ablaNumber "\<0[xX][0-9A-Fa-f]\+\(_[0-9A-Fa-f]\+\)*\>"
 syn match ablaNumber "\<[0-9]\+\(_[0-9]\+\)*\(\.[0-9]\+\(_[0-9]\+\)*\)\=\([eE][+-]\=[0-9]\+\)\=\>"
 syn match ablaAnnotation "@[A-Za-z_][A-Za-z0-9_]*"
 syn match ablaCompileTime "#"
+syn match ablaOperator "&&=\|||="
 syn match ablaEscape contained "\\\(u[0-9A-Fa-f]\{4}\|.\)"
 syn match ablaInterpolation contained "\$[A-Za-z_][A-Za-z0-9_]*"
 syn region ablaInterpolationBlock contained matchgroup=ablaInterpolation start="\${" end="}" contains=TOP
@@ -35,6 +36,7 @@ hi def link ablaTypeName Type
 hi def link ablaNumber Number
 hi def link ablaAnnotation PreProc
 hi def link ablaCompileTime Macro
+hi def link ablaOperator Operator
 hi def link ablaEscape SpecialChar
 hi def link ablaInterpolation Special
 hi def link ablaString String

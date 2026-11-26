@@ -12,4 +12,4 @@ languages = ["Abla"]
 
 [grammars.abla]
 repository = "https://github.com/AndreBaltazar8/tree-sitter-abla"
-rev = "9aaf82ce0fafe5417357283945217e7e014abfe1"
+rev = "b235670feb7388b4bee44297a76e57b89706f76b"
