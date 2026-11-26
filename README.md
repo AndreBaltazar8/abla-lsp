@@ -48,9 +48,11 @@ Refactorings also appear as code actions: `refactor.extract.function` and `refac
 `refactor.inline` and `refactor.rewrite.binding` (val/var) at a local or top-level function. The action carries only its
 command; the compiler-validated edit is computed when it is chosen (`codeAction/resolve`).
 
-`source.fixAll` (VS Code: `editor.codeActionsOnSave` `source.fixAll`) applies, in one compiler-validated edit, every
-diagnostic whose single compiler fix adds a missing import or removes an unused one. Did-you-mean replacements and
-unused-local fixes stay explicit quick fixes.
+**Add all missing imports** is available anywhere in a file with at least two missing-import diagnostics when
+the compiler can validate the combined edit. It uses the same insertion planner as `ablac fix-imports`.
+Set `source.fixAll.abla.missingImports` in VS Code's `editor.codeActionsOnSave` to run this action on save.
+`source.fixAll` also prefers it when available. Otherwise it offers one compiler-validated edit for unambiguous
+import additions and removals. Did-you-mean replacements and unused-local fixes stay explicit quick fixes.
 
 In a call such as `send(name =)`, the quick fix fills in `name = name` at the
 missing-expression diagnostic. The inserted value must be in scope and have

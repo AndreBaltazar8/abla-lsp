@@ -58,6 +58,7 @@ export class CompilerClient {
   #nextId = 1;
   #stopping = false;
   #sourceRevision: string | undefined;
+  #missingImports = false;
   readonly #sources = new Map<string, { readonly uri: string; readonly map: Utf8OffsetMap }>();
   // graph-v2 `since`: the last answer held (normalized), the revision and the fields it was asked with, and whether the compiler offers it.
   #since = false;
@@ -73,6 +74,7 @@ export class CompilerClient {
     if (this.#process !== undefined) throw new Error("compiler client is already started");
     this.#stopping = false;
     this.#sourceRevision = undefined;
+    this.#missingImports = false;
     this.#sources.clear();
     this.#since = false; this.#held.clear(); this.#heldRevision = undefined; this.#heldFields = undefined;
     // On macOS a compiler before 0.2.69 faults at its first freeze: it is started with the freeze off (src/compiler-environment.ts), for every user of this client.
@@ -107,6 +109,7 @@ export class CompilerClient {
     });
     const initialized = await this.request<CompilerInitializeResult>("initialize", params);
     this.#since = params.analysisMode === "graph-v2" && initialized.capabilities.includes("analysis-since-v1");
+    this.#missingImports = initialized.capabilities.includes("analysis-missing-imports-v1");
     return initialized;
   }
 
@@ -232,6 +235,15 @@ export class CompilerClient {
     this.#checkQueryRevision(params, result.revision);
     const maps = new Map([...this.#sources].map(([uri, source]) => [uri, source.map]));
     return { ...result, value, ...(result.pending === undefined ? {} : { pending: normalizePending(result.pending, maps) }) };
+  }
+
+  async missingImports(uri: string, revision: string): Promise<{ readonly offset: number; readonly newText: string } | null> {
+    if (!this.#missingImports) return null;
+    const edit = await this.request<{ readonly offset: number; readonly newText: string } | null>(
+      "query/missingImports", { uri, revision },
+    );
+    if (edit === null || revision !== this.#sourceRevision) return null;
+    return { ...edit, offset: this.#source(uri).map.offset(edit.offset) };
   }
 
   async validate(

@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import type { CodeAction } from "vscode-languageserver/node";
+import { TextDocument } from "vscode-languageserver-textdocument";
 
 import { connect } from "./lsp-client.js";
+import { CompilerClient } from "../src/compiler-client.js";
 
 const compiler = process.env.ABLA_COMPILER;
 
@@ -111,4 +115,75 @@ test("source.fixAll adds the missing import and removes the unused one in one co
   assert.equal(actions[0]?.kind, "source.fixAll");
   const edits = Object.values(actions[0]?.edit?.changes ?? {}).flat().map((edit) => edit.newText);
   assert.ok(edits.some((value) => value.includes('import "abla/json"')), JSON.stringify(edits));
+});
+
+for (const scope of ["stdlib", "sibling"] as const) test(`add all missing imports matches fix-imports and is available on save (${scope})`, {
+  skip: compiler === undefined ? "set ABLA_COMPILER to run the compiler integration gate" : false,
+  timeout: 120_000,
+}, async (context) => {
+  assert.ok(compiler);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-imports-"));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const probe = new CompilerClient({ executable: compiler });
+  const init = await probe.start({ workspaceRoots: [root], analysisMode: "graph-v2", clientName: "test", clientVersion: "1" });
+  await probe.stop();
+  if (!init.capabilities.includes("analysis-missing-imports-v1")) {
+    context.skip("compiler lacks the missing-imports planner");
+    return;
+  }
+
+  const siblings = ["first", "second", "third"];
+  const text = scope === "stdlib"
+    ? await fs.readFile("test/fixtures/missing-imports.ab", "utf8")
+    : 'import "./support.ab"\nfun main: int = support() + first() + second() + third()\n';
+  if (scope === "sibling") {
+    for (const name of siblings) await fs.writeFile(path.join(root, `${name}.ab`), `fun ${name}: int = 1\n`);
+    const imports = siblings.map((name) => `import "./${name}.ab"\n`).join("");
+    await fs.writeFile(path.join(root, "support.ab"), imports + "fun support: int = first() + second() + third()\n");
+  }
+  const file = path.join(root, "main.ab");
+  const cli = path.join(root, "cli.ab");
+  await fs.writeFile(path.join(root, "abla.toml"), 'name = "missing-imports"\nentry = "main.ab"\nvisibility = "imports"\n');
+  await fs.writeFile(file, text);
+  await fs.writeFile(cli, text);
+  const result = execFileSync(compiler, ["fix-imports", cli], { cwd: root, encoding: "utf8", timeout: 60_000 });
+  assert.match(result, /added 3 import\(s\) in 1 file\(s\); 0 name\(s\) left unresolved/u);
+  const expected = await fs.readFile(cli, "utf8");
+  const modules = scope === "stdlib" ? ["abla/io", "abla/json", "abla/regex"] : siblings.map((name) => `./${name}.ab`);
+  for (const module of modules) assert.ok(expected.includes(`import "${module}"\n`));
+
+  const uri = pathToFileURL(file).href;
+  const { request } = await connect(context, root, uri, text);
+  const position = { line: 0, character: 3 };
+  const actions = async (only: string): Promise<CodeAction[]> => {
+    const reply = await request("textDocument/codeAction", {
+      textDocument: { uri },
+      range: { start: position, end: position },
+      context: { diagnostics: [], only: [only] },
+    });
+    assert.equal(reply.error, undefined, JSON.stringify(reply));
+    return (reply.result as CodeAction[]).filter((action) => action.title === "Add all missing imports");
+  };
+  let quickFix: CodeAction[] = [];
+  for (let attempt = 0; attempt < 40 && quickFix.length === 0; attempt += 1) {
+    quickFix = await actions("quickfix");
+    if (quickFix.length === 0) await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  const saveKind = "source.fixAll.abla.missingImports";
+  for (const [answer, kind] of [[quickFix, "quickfix"], [await actions("source.fixAll"), saveKind], [await actions(saveKind), saveKind]] as const) {
+    assert.equal(answer.length, 1);
+    assert.equal(answer[0]?.kind, kind);
+    const changes = answer[0]?.edit?.documentChanges;
+    assert.equal(changes?.length, 1);
+    const change = changes?.[0];
+    assert.ok(change !== undefined && "textDocument" in change);
+    assert.deepEqual(change.textDocument, { uri, version: 1 });
+    assert.equal(change.edits.length, 1);
+    const edit = change.edits[0];
+    assert.ok(edit !== undefined && "newText" in edit);
+    const actual = TextDocument.applyEdits(TextDocument.create(uri, "abla", 1, text), [edit]);
+    assert.equal(actual, expected);
+  }
+  assert.equal(await fs.readFile(file, "utf8"), text, "requesting an edit must not change the file on disk");
+  await request("shutdown", null);
 });

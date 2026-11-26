@@ -1199,16 +1199,55 @@ async function unusedRemovals(
   return [{ title, edit: preview(result.edit, title) }];
 }
 
+const missingImportsFixAll = `${CodeActionKind.SourceFixAll}.abla.missingImports`;
+
+async function missingImportsEdit(analysis: DocumentAnalysis): Promise<WorkspaceEdit | undefined> {
+  const active = compiler;
+  const workspace = compilerWorkspace;
+  const generation = workspace?.generation;
+  const revision = compilerRevision;
+  const current = documents.get(analysis.uri);
+  if (active === undefined || revision === undefined ||
+      (current !== undefined && current.getText() !== analysis.text)) return undefined;
+  const missing = analysis.diagnostics.filter((diagnostic) =>
+    diagnostic.code === "E_NAME_NOT_IMPORTED" ||
+    (diagnostic.code === "E_SEMANTIC" && diagnostic.fixes?.some((fix) => fix.kind === "import")));
+  if (missing.length < 2) return undefined;
+  try {
+    await assertOwnedEdit(analysis.uri, false);
+    const plan = await active.missingImports(analysis.uri, revision);
+    if (plan === null || workspace !== compilerWorkspace || generation !== workspace?.generation ||
+        revision !== compilerRevision) return undefined;
+    const at = new PositionMap(analysis.text).position(plan.offset);
+    return {
+      documentChanges: [{
+        textDocument: { uri: analysis.uri, version: current?.version ?? null },
+        edits: [{ range: { start: at, end: at }, newText: plan.newText }],
+      }],
+    };
+  } catch {
+    // Stale, incomplete or rejected plans are not offered.
+    return undefined;
+  }
+}
+
 connection.onCodeAction(async (params) => {
   if (!(await ensureCompilerFacts(params.textDocument.uri))) return [];
   const semanticActions = compilerWorkspace?.graph !== true || compilerSnapshot?.complete === true;
   const analysis = index.document(params.textDocument.uri);
   if (analysis === undefined) return [];
   const actions: CodeAction[] = [];
+  const only = params.context.only;
+  const quickFixes = only === undefined || only.some((kind) => CodeActionKind.QuickFix.startsWith(kind));
+  const sourceMissingImports = only?.some((kind) => missingImportsFixAll.startsWith(kind)) ?? false;
+  const importEdit = analysis.authority === "compiler" && (quickFixes || sourceMissingImports)
+    ? await missingImportsEdit(analysis) : undefined;
+  if (importEdit !== undefined) {
+    actions.push({ title: "Add all missing imports", kind: sourceMissingImports ? missingImportsFixAll : CodeActionKind.QuickFix, edit: importEdit });
+  }
   if (
     analysis.authority === "compiler" &&
-    (params.context.only === undefined ||
-      params.context.only.some((kind) => CodeActionKind.QuickFix.startsWith(kind)))
+    quickFixes
   ) {
     const positions = new PositionMap(analysis.text);
     // This repairs a parser error, for which the compiler graph is incomplete.
@@ -1302,8 +1341,8 @@ connection.onCodeAction(async (params) => {
   }
   // Fix all: only when asked for by kind (a save action), since the combined edit is validated by the compiler.
   if (
-    semanticActions && analysis.authority === "compiler" && params.context.only !== undefined &&
-    params.context.only.some((kind) => CodeActionKind.SourceFixAll.startsWith(kind) || kind.startsWith(CodeActionKind.SourceFixAll))
+    importEdit === undefined && semanticActions && analysis.authority === "compiler" &&
+    only?.some((kind) => CodeActionKind.SourceFixAll.startsWith(kind))
   ) {
     const edit = fixAllEdit(analysis);
     if (edit !== undefined) {

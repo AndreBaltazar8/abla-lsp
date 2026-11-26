@@ -134,6 +134,7 @@ export type CompilerMethod =
   | "document/change"
   | "document/close"
   | "analyze"
+  | "query/missingImports"
   | "refactor/validate"
   | CompilerQueryMethod
   | "shutdown";

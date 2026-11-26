@@ -1,0 +1,8 @@
+// café 😀
+
+fun main: int {
+    println("imports")
+    val value = jsonString("json")
+    val pattern = regexCompile("a")
+    if (pattern.succeeded) value.asString().size else 0
+}
