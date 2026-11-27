@@ -12,6 +12,7 @@ import { promises as fs, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveExecutable } from "./executable-path.js";
 
 interface Position { line: number; character: number }
 interface Range { start: Position; end: Position }
@@ -105,7 +106,8 @@ class Server {
     const main = path.join(path.dirname(fileURLToPath(import.meta.url)), "main.js");
     this.child = spawn(process.execPath, [main, "--stdio"], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: compiler === undefined ? process.env : { ...process.env, ABLA_COMPILER: compiler },
+      // A --compiler path typed relative to the shell's directory is made absolute here (the server takes absolute paths and names only).
+      env: compiler === undefined ? process.env : { ...process.env, ABLA_COMPILER: /[\\/]/u.test(compiler) ? path.resolve(compiler) : compiler },
     });
     this.child.stderr.on("data", (chunk: Buffer) => {
       this.stderr += String(chunk);
@@ -308,7 +310,10 @@ async function renderDiff(changes: readonly FileChange[]): Promise<string> {
       const next = path.join(directory, `${index}.new`);
       await fs.writeFile(old, change.before ?? "");
       await fs.writeFile(next, change.after ?? "");
-      const diff = spawnSync("diff", ["-u", "--label", change.before === undefined ? "/dev/null" : `a/${relative}`, "--label", change.after === undefined ? "/dev/null" : `b/${relative}`, old, next], { encoding: "utf8", maxBuffer: 1 << 28 });
+      // diff from PATH, not from the project the command runs in (src/executable-path.ts).
+      const diffPath = resolveExecutable("diff");
+      if (diffPath === undefined) throw new Environment("diff is needed to print the changes: not found on PATH");
+      const diff = spawnSync(diffPath, ["-u", "--label", change.before === undefined ? "/dev/null" : `a/${relative}`, "--label", change.after === undefined ? "/dev/null" : `b/${relative}`, old, next], { encoding: "utf8", maxBuffer: 1 << 28, cwd: directory });
       if (diff.error !== undefined) throw new Environment(`diff is needed to print the changes: ${diff.error.message}`);
       output += diff.stdout;
     }

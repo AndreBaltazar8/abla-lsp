@@ -24,7 +24,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "test": "npm run build && node --test dist/test/compiler-client.test.js dist/test/compiler-since.test.js dist/test/compiler-workspace.test.js dist/test/diagnostics.test.js dist/test/compiler-refactors.test.js dist/test/editor-features.test.js dist/test/encoding.test.js dist/test/graph-compiler.test.js dist/test/graph-server.test.js dist/test/refactors.test.js dist/test/cli.test.js dist/test/cross-module.test.js dist/test/hierarchy.test.js dist/test/debug-dap.test.js dist/test/dap-proxy.test.js dist/test/code-actions.test.js dist/test/server.test.js dist/test/source.test.js dist/test/staged-refactors.test.js dist/test/vscode-manifest.test.js dist/test/compiler-environment.test.js && npm --prefix editors/vscode test",
+    "test": "npm run build && node --test dist/test/compiler-client.test.js dist/test/compiler-since.test.js dist/test/compiler-workspace.test.js dist/test/diagnostics.test.js dist/test/compiler-refactors.test.js dist/test/editor-features.test.js dist/test/encoding.test.js dist/test/graph-compiler.test.js dist/test/graph-server.test.js dist/test/refactors.test.js dist/test/cli.test.js dist/test/cross-module.test.js dist/test/hierarchy.test.js dist/test/debug-dap.test.js dist/test/dap-proxy.test.js dist/test/code-actions.test.js dist/test/server.test.js dist/test/source.test.js dist/test/staged-refactors.test.js dist/test/vscode-manifest.test.js dist/test/compiler-environment.test.js dist/test/executable-path.test.js && npm --prefix editors/vscode test",
     "test:editors": "npm run build && sh tools/test-editors.sh",
     "validate": "npm test && sh tools/test-editors.sh && npm pack --dry-run && npm --prefix editors/vscode run package"
   },

@@ -2,6 +2,8 @@ import type { AblaSymbol } from "./model.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { analysisEnvironment, compilerVersionText } from "./compiler-environment.js";
 import { createInterface } from "node:readline";
+import { tmpdir } from "node:os";
+import { resolveExecutable } from "./executable-path.js";
 import {
   compilerProtocolVersion,
   isCompilerResponse,
@@ -34,8 +36,11 @@ interface PendingRequest {
 export interface CompilerClientOptions {
   readonly executable: string;
   readonly arguments?: readonly string[];
+  /** The compiler's working directory: the system's temporary directory unless given (never the workspace, see src/executable-path.ts). */
   readonly cwd?: string;
   readonly environment?: Readonly<Record<string, string>>;
+  /** The workspace folders: a compiler found on PATH inside one is not run. */
+  readonly workspaceRoots?: readonly string[];
   readonly log?: (message: string) => void;
   readonly onExit?: (error: Error) => void;
 }
@@ -77,16 +82,19 @@ export class CompilerClient {
     this.#missingImports = false;
     this.#sources.clear();
     this.#since = false; this.#held.clear(); this.#heldRevision = undefined; this.#heldFields = undefined;
+    const environment = { ...process.env, ...this.#options.environment };
+    const executable = resolveExecutable(this.#options.executable, { environment, workspaceRoots: this.#options.workspaceRoots ?? [] });
+    if (executable === undefined) throw new Error(`compiler ${JSON.stringify(this.#options.executable)} not found: a name is looked up on PATH (absolute entries, outside the workspace), a path must be absolute`);
     // On macOS a compiler before 0.2.69 faults at its first freeze: it is started with the freeze off (src/compiler-environment.ts), for every user of this client.
     const platformEnvironment = process.platform === "darwin"
-      ? analysisEnvironment(process.platform, compilerVersionText(this.#options.executable), { ...process.env, ...this.#options.environment })
+      ? analysisEnvironment(process.platform, compilerVersionText(executable), environment)
       : {};
     if (platformEnvironment.ABLA_ANALYSIS_FREEZE !== undefined) this.#options.log?.("macOS: this ablac is older than 0.2.69: starting it with ABLA_ANALYSIS_FREEZE=0");
     const child = spawn(
-      this.#options.executable,
+      executable,
       [...(this.#options.arguments ?? ["analyze", "--stdio"])],
       {
-        cwd: this.#options.cwd,
+        cwd: this.#options.cwd ?? tmpdir(),
         env: { ...process.env, ...platformEnvironment, ...this.#options.environment },
         stdio: ["pipe", "pipe", "pipe"],
       },

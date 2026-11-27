@@ -470,6 +470,7 @@ async function startCompiler(): Promise<void> {
   const createClient = (): CompilerClient => {
     const child = new CompilerClient({
       executable: compilerConfiguration.path,
+      workspaceRoots,
       ...(compilerConfiguration.arguments === undefined ? {} : { arguments: compilerConfiguration.arguments }),
       log: (message) => connection.console.info(`ablac analyze: ${message}`),
       onExit: (error) => {

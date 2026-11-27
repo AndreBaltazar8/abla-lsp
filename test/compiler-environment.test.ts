@@ -36,6 +36,6 @@ test("the version is read from the first three numbers", () => {
 test("the client applies the environment where it spawns", async () => {
   const { readFileSync } = await import("node:fs");
   const client = readFileSync(new URL("../../src/compiler-client.ts", import.meta.url), "utf8");
-  assert.ok(client.includes("analysisEnvironment(process.platform, compilerVersionText(this.#options.executable)"));
+  assert.ok(client.includes("analysisEnvironment(process.platform, compilerVersionText(executable)"));
   assert.ok(client.includes("...platformEnvironment, ...this.#options.environment"));
 });

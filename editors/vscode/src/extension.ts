@@ -7,6 +7,7 @@ import {
   type ServerOptions,
 } from "vscode-languageclient/node";
 import { registerDebugging } from "./debug";
+import { toolPath } from "./executables";
 
 let client: LanguageClient | undefined;
 
@@ -320,12 +321,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const serverPath = configuration.get("server.path", "").trim();
   const compilerPath = configuration.get("compiler.path", "ablac");
   const compilerEnabled = configuration.get("compiler.enabled", true);
-  const serverOptions: ServerOptions = serverPath === ""
+  // The server runs in the extension's directory, not the workspace's (src/executable-path.ts: what a bare name would find there).
+  const server = serverPath === "" ? undefined : toolPath(serverPath);
+  if (serverPath !== "" && server === undefined) {
+    void vscode.window.showErrorMessage(`Abla: abla.server.path ${serverPath} not found (a name is looked up on PATH outside the workspace); using the bundled server.`);
+  }
+  const serverOptions: ServerOptions = server === undefined
     ? {
         module: context.asAbsolutePath("dist/server.cjs"),
         transport: TransportKind.ipc,
+        options: { cwd: context.extensionPath },
       }
-    : { command: serverPath, args: ["--stdio"] };
+    : { command: server, args: ["--stdio"], options: { cwd: context.extensionPath } };
   const fileEvents = ["**/*.ab", "**/abla.toml", "**/abla.lock"].map((pattern) =>
     vscode.workspace.createFileSystemWatcher(pattern));
   context.subscriptions.push(...fileEvents);
@@ -390,7 +397,12 @@ async function runTest(uri: string): Promise<void> {
   }
   const file = vscode.Uri.parse(uri);
   const folder = vscode.workspace.getWorkspaceFolder(file);
-  const compiler = vscode.workspace.getConfiguration("abla").get<string>("compiler.path", "ablac");
+  const compilerSetting = vscode.workspace.getConfiguration("abla").get<string>("compiler.path", "ablac");
+  const compiler = toolPath(compilerSetting);
+  if (compiler === undefined) {
+    void vscode.window.showErrorMessage(`Abla: ${compilerSetting} not found (a name is looked up on PATH outside the workspace; set abla.compiler.path to an absolute path).`);
+    return;
+  }
   const task = new vscode.Task(
     { type: "abla-test" },
     folder ?? vscode.TaskScope.Workspace,

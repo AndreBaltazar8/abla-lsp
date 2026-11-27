@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { toolPath } from "./executables";
 import { ablaGdbArguments, ablaLldbCommands, isRuntimeFrame } from "../../../src/debugger-commands";
 import { DapProxy } from "../../../src/dap-proxy";
 
@@ -14,14 +16,17 @@ export { ablaLldbCommands };
 // The lldb-dap executable: the `abla.debug.lldbDapPath` setting, else `lldb-dap` on the PATH, else none.
 function lldbDapExecutable(): string | undefined {
   const configured = vscode.workspace.getConfiguration("abla").get<string>("debug.lldbDapPath", "");
-  const candidate = configured === "" ? "lldb-dap" : configured;
-  const result = spawnSync(candidate, ["--help"], { encoding: "utf8" });
+  const candidate = toolPath(configured === "" ? "lldb-dap" : configured);
+  if (candidate === undefined) return undefined;
+  const result = spawnSync(candidate, ["--help"], { encoding: "utf8", cwd: tmpdir() });
   return result.error === undefined && result.status === 0 ? candidate : undefined;
 }
 
 // Whether `gdb` exists and has the DAP mode (gdb 14 or newer).
 function gdbHasDap(): boolean {
-  const result = spawnSync("gdb", ["--version"], { encoding: "utf8" });
+  const gdb = toolPath("gdb");
+  if (gdb === undefined) return false;
+  const result = spawnSync(gdb, ["--version"], { encoding: "utf8", cwd: tmpdir() });
   return result.status === 0 && /GNU gdb.* (1[4-9]|[2-9][0-9])\./u.test(result.stdout);
 }
 
@@ -118,7 +123,12 @@ export class AblaDebugConfigurationProvider implements vscode.DebugConfiguration
       return undefined;
     }
     if (attaching) return attachConfiguration(configuration);
-    const compiler = vscode.workspace.getConfiguration("abla").get<string>("compiler.path", "ablac");
+    const compilerSetting = vscode.workspace.getConfiguration("abla").get<string>("compiler.path", "ablac");
+    const compiler = toolPath(compilerSetting);
+    if (compiler === undefined) {
+      void vscode.window.showErrorMessage(`Abla debugging: ${compilerSetting} not found (a name is looked up on PATH outside the workspace; set abla.compiler.path to an absolute path).`);
+      return undefined;
+    }
     const cwd = typeof configuration.cwd === "string" ? configuration.cwd
       : folder?.uri.fsPath ?? directoryOf(program);
     const executable = typeof configuration.output === "string" ? configuration.output
@@ -214,7 +224,10 @@ export function registerDebugging(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider("abla", new AblaDebugConfigurationProvider()),
     vscode.debug.registerDebugAdapterDescriptorFactory("abla-gdb", {
-      createDebugAdapterDescriptor: () => new vscode.DebugAdapterExecutable("gdb", [...ablaGdbArguments]),
+      createDebugAdapterDescriptor: () => {
+        const gdb = toolPath("gdb");
+        return gdb === undefined ? undefined : new vscode.DebugAdapterExecutable(gdb, [...ablaGdbArguments]);
+      },
     }),
     vscode.debug.registerDebugAdapterDescriptorFactory("abla-lldb", {
       createDebugAdapterDescriptor: (session) => new vscode.DebugAdapterInlineImplementation(new ProxyAdapter(String(session.configuration.ablaLldbDap))),
