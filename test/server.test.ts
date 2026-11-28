@@ -26,9 +26,11 @@ class LspClient {
     Array<{ readonly matches: (params: unknown) => boolean; readonly resolve: (params: unknown) => void }>
   >();
 
-  constructor() {
+  /** A fake compiler's arguments go through the server's environment: initialization options may only give analyze --stdio. */
+  constructor(compilerArguments?: readonly string[]) {
     this.#child = spawn(process.execPath, ["dist/src/main.js", "--stdio"], {
       cwd: process.cwd(),
+      env: { ...process.env, ...(compilerArguments === undefined ? {} : { ABLA_COMPILER_ARGUMENTS: JSON.stringify(compilerArguments) }) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.#child.stdout.on("data", (chunk: Buffer) => {
@@ -264,7 +266,7 @@ test("stdio server initializes and serves symbols and rename", async () => {
 });
 
 test("compiler snapshots drive type definitions", async (context) => {
-  const client = new LspClient();
+  const client = new LspClient([path.resolve("test/fixtures/fake-ablac.mjs")]);
   context.after(async () => client.stop().catch(() => undefined));
   await client.request("initialize", {
     processId: process.pid,
@@ -274,7 +276,6 @@ test("compiler snapshots drive type definitions", async (context) => {
       compiler: {
         enabled: true,
         path: process.execPath,
-        arguments: [path.resolve("test/fixtures/fake-ablac.mjs")],
         unusedLocals: true,
         unusedParameters: true,
         unusedDeclarations: true,
@@ -383,7 +384,7 @@ test("compiler snapshots drive type definitions", async (context) => {
 });
 
 test("execute-command refactors are compiler validated and applied as workspace edits", async (context) => {
-  const client = new LspClient();
+  const client = new LspClient([path.resolve("test/fixtures/refactor-ablac.mjs")]);
   context.after(async () => client.stop().catch(() => undefined));
   const initialize = await client.request("initialize", {
     processId: process.pid,
@@ -393,7 +394,6 @@ test("execute-command refactors are compiler validated and applied as workspace 
       compiler: {
         enabled: true,
         path: process.execPath,
-        arguments: [path.resolve("test/fixtures/refactor-ablac.mjs")],
       },
     },
   });
@@ -695,4 +695,68 @@ test("a real compiler's four unused warnings are greyed out and each has a worki
   }, 180_000);
   client.notify("textDocument/didChange", { textDocument: { uri, version: 2 }, contentChanges: [{ text: fixed }] });
   await clean;
+});
+
+// ED3 (#1139 editor review): initialization options can come from a project's own editor settings in an editor without a trust
+// prompt. A compiler path inside the workspace (also through a link from outside) is not run, and the compiler is started only
+// with `analyze --stdio`: other arguments could make it build or run the project.
+const posixOnly = { skip: process.platform === "win32" ? "the canary compilers are shell scripts" : false };
+
+async function canaryCompiler(directory: string, canary: string): Promise<string> {
+  await fs.mkdir(directory, { recursive: true });
+  const file = path.join(directory, "ablac");
+  await fs.writeFile(file, `#!/bin/sh\necho "$@" >> ${JSON.stringify(canary)}\nexit 1\n`);
+  await fs.chmod(file, 0o755);
+  return file;
+}
+
+async function exists(file: string): Promise<boolean> {
+  try { await fs.access(file); return true; } catch { return false; }
+}
+
+test("a compiler path from the initialization options inside the workspace is not run", posixOnly, async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-ed3-"));
+  context.after(async () => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  const canary = path.join(root, "ran");
+  const inside = await canaryCompiler(workspace, canary);
+  const link = path.join(root, "outside-link");
+  await fs.symlink(inside, link);
+  for (const configured of [inside, link]) {
+    const client = new LspClient();
+    context.after(async () => client.stop().catch(() => undefined));
+    const refused = client.waitForNotification("window/logMessage",
+      (params) => /compiler analysis unavailable.*outside the workspace/u.test((params as { message?: string }).message ?? ""), 10_000);
+    await client.request("initialize", { processId: process.pid, rootUri: pathToFileURL(workspace).href, capabilities: {}, initializationOptions: { compiler: { path: configured } } });
+    client.notify("initialized", {});
+    await refused;
+  }
+  assert.equal(await exists(canary), false, "the workspace's compiler ran");
+});
+
+test("compiler arguments other than analyze --stdio are refused, and the compiler is not started", posixOnly, async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-ed3-"));
+  context.after(async () => fs.rm(root, { recursive: true, force: true }));
+  const canary = path.join(root, "ran");
+  const outside = await canaryCompiler(path.join(root, "tools"), canary);
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace);
+  for (const configured of [["build", "main.ab"], ["analyze", "--stdio", "--extra"], []]) {
+    const client = new LspClient();
+    context.after(async () => client.stop().catch(() => undefined));
+    const warning = client.waitForNotification("window/logMessage",
+      (params) => /compiler analysis unavailable.*compiler\.arguments .* refused/u.test((params as { message?: string }).message ?? ""), 10_000);
+    await client.request("initialize", { processId: process.pid, rootUri: pathToFileURL(workspace).href, capabilities: {}, initializationOptions: { compiler: { path: outside, arguments: configured } } });
+    client.notify("initialized", {});
+    await warning;
+  }
+  assert.equal(await exists(canary), false, "the compiler was started with refused arguments");
+  // The one argument list that is taken: the compiler is started (the canary records it).
+  const client = new LspClient();
+  context.after(async () => client.stop().catch(() => undefined));
+  await client.request("initialize", { processId: process.pid, rootUri: pathToFileURL(workspace).href, capabilities: {}, initializationOptions: { compiler: { path: outside, arguments: ["analyze", "--stdio"] } } });
+  client.notify("initialized", {});
+  const deadline = Date.now() + 10_000;
+  while (!(await exists(canary)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal((await fs.readFile(canary, "utf8")).split("\n")[0], "analyze --stdio");
 });

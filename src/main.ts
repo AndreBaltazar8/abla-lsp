@@ -103,7 +103,11 @@ let workspaceRoots: string[] = [];
 let compilerConfiguration: {
   readonly enabled: boolean;
   readonly path: string;
+  /** The path came from the initialization options, which a project's own editor settings may supply: it must lie outside the workspace. */
+  readonly pathConfigured?: boolean;
   readonly arguments?: readonly string[];
+  /** Why the initialization options' compiler settings were refused (the compiler is then not started). */
+  readonly refused?: string;
   readonly unusedImports: boolean;
   readonly unusedLocals: boolean;
   readonly unusedParameters: boolean;
@@ -351,9 +355,17 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   clientPreviewsEdits = workspaceEdits?.documentChanges === true && workspaceEdits.changeAnnotationSupport !== undefined;
   typeInlayHints = initialization?.inlayHints?.types ?? true;
   const configured = initialization?.compiler;
+  // The compiler runs `analyze --stdio` and nothing else: other arguments in the initialization options (which an editor may take
+  // from the project's own settings) could make it build or run the project. A test's fake compiler gets its arguments from the
+  // server's own environment instead (ABLA_COMPILER_ARGUMENTS, a JSON array), as ABLA_COMPILER gives the path.
+  const argumentsRefused = configured?.arguments !== undefined &&
+    JSON.stringify(configured.arguments) !== JSON.stringify(["analyze", "--stdio"]);
+  const environmentArguments = compilerArgumentsFromEnvironment(process.env.ABLA_COMPILER_ARGUMENTS);
   compilerConfiguration = {
-    enabled: configured?.enabled ?? true,
+    enabled: !argumentsRefused && (configured?.enabled ?? true),
     path: configured?.path ?? process.env.ABLA_COMPILER ?? "ablac",
+    ...(configured?.path === undefined ? {} : { pathConfigured: true }),
+    ...(argumentsRefused ? { refused: `compiler.arguments ${JSON.stringify(configured?.arguments)} refused: the compiler is started only with ["analyze","--stdio"]` } : {}),
     unusedImports: configured?.unusedImports ?? true,
     unusedLocals: configured?.unusedLocals ?? false,
     unusedParameters: configured?.unusedParameters ?? false,
@@ -361,7 +373,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     jsonConstruction: configured?.jsonConstruction ?? false,
     regexConstruction: configured?.regexConstruction ?? false,
     ...(configured?.entryPoints === undefined ? {} : { entryPoints: configured.entryPoints }),
-    ...(configured?.arguments === undefined ? {} : { arguments: configured.arguments }),
+    ...(environmentArguments === undefined ? {} : { arguments: environmentArguments }),
   };
   const roots = params.workspaceFolders?.map((folder) => folder.uri) ??
     (params.rootUri === null || params.rootUri === undefined ? [] : [params.rootUri]);
@@ -463,14 +475,27 @@ connection.onInitialized(() => {
   void indexWorkspace(connection, index, workspaceRoots).catch((error: unknown) => {
     connection.console.error(`workspace indexing failed: ${String(error)}`);
   });
-  if (compilerConfiguration.enabled) void startCompiler();
+  if (compilerConfiguration.refused !== undefined) {
+    connection.console.warn(`compiler analysis unavailable; continuing in syntax mode: ${compilerConfiguration.refused}`);
+    void connection.window.showWarningMessage(`Abla: ${compilerConfiguration.refused}`);
+  } else if (compilerConfiguration.enabled) void startCompiler();
 });
+
+// ABLA_COMPILER_ARGUMENTS: a JSON array of strings, or nothing (anything else is ignored).
+function compilerArgumentsFromEnvironment(text: string | undefined): readonly string[] | undefined {
+  if (text === undefined) return undefined;
+  try {
+    const value: unknown = JSON.parse(text);
+    return Array.isArray(value) && value.every((item) => typeof item === "string") ? value as string[] : undefined;
+  } catch { return undefined; }
+}
 
 async function startCompiler(): Promise<void> {
   const createClient = (): CompilerClient => {
     const child = new CompilerClient({
       executable: compilerConfiguration.path,
       workspaceRoots,
+      ...(compilerConfiguration.pathConfigured === true ? { absoluteOutsideWorkspace: true } : {}),
       ...(compilerConfiguration.arguments === undefined ? {} : { arguments: compilerConfiguration.arguments }),
       log: (message) => connection.console.info(`ablac analyze: ${message}`),
       onExit: (error) => {

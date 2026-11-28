@@ -128,3 +128,20 @@ test("no spawn in the server, the CLI or the extension names its program as a li
     assert.equal(literal, null, `${url.pathname}: ${literal?.[0]} (resolve it with src/executable-path.ts)`);
   }
 });
+
+test("with absoluteOutsideWorkspace an absolute path inside a workspace, or linked into one, is refused", posixOnly, () => {
+  const root = scratch();
+  try {
+    const workspace = path.join(root, "workspace");
+    const inside = tool(workspace, "ablac");
+    const outside = tool(path.join(root, "tools"), "ablac");
+    const link = path.join(root, "link-ablac");
+    symlinkSync(inside, link);
+    const search = { platform: "linux" as const, environment: { PATH: "" }, workspaceRoots: [workspace], absoluteOutsideWorkspace: true };
+    assert.equal(resolveExecutable(inside, search), undefined);
+    assert.equal(resolveExecutable(link, search), undefined);
+    assert.equal(resolveExecutable(outside, search), outside);
+    // Without it (the editor's own machine-scoped setting) the path is used as given.
+    assert.equal(resolveExecutable(inside, { ...search, absoluteOutsideWorkspace: false }), inside);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

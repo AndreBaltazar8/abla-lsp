@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,10 +10,12 @@ import { PositionMap } from "../src/positions.js";
 import { CompilerClient } from "../src/compiler-client.js";
 type Message = { id?:number; method?:string; result?:unknown; error?:{message:string}; params?:unknown };
 class Server {
- readonly child=spawn(process.execPath,['dist/src/main.js','--stdio'],{stdio:['pipe','pipe','pipe']});
+ readonly child:ChildProcessWithoutNullStreams;
  readonly messages:Message[]=[];readonly pending=new Map<number,{resolve:(m:Message)=>void;reject:(e:Error)=>void}>();
  stderr='';buffer=Buffer.alloc(0);id=0;
- constructor(){
+ // A fake compiler's arguments reach the server through its environment: initialization options may only give analyze --stdio.
+ constructor(compilerArguments?:string[]){
+  this.child=spawn(process.execPath,['dist/src/main.js','--stdio'],{stdio:['pipe','pipe','pipe'],env:{...process.env,...(compilerArguments===undefined?{}:{ABLA_COMPILER_ARGUMENTS:JSON.stringify(compilerArguments)})}});
   this.child.stderr.on('data',b=>{this.stderr+=String(b);});
   this.child.stdout.on('data',(chunk:Buffer)=>{this.buffer=Buffer.concat([this.buffer,chunk]);this.drain();});
   this.child.on('exit',()=>{for(const p of this.pending.values())p.reject(new Error('server exited '+this.stderr));this.pending.clear();});
@@ -34,8 +36,8 @@ class Server {
 async function fixture(){const root=await fs.mkdtemp(path.join(os.tmpdir(),'abla-lsp-server-'));const file=path.join(root,'main.ab');const text='// café 😀\nfun target(): int = 42\nfun main: int = target()\n';await fs.writeFile(path.join(root,'abla.toml'),'name = "lsp-test"\nentry = "main.ab"\n');await fs.writeFile(file,text);return{root,file,uri:pathToFileURL(file).href,text};}
 async function trace(file:string):Promise<Array<{method:string;params:Record<string,unknown>;pid:number}>> {return (await fs.readFile(file,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));}
 for(const mode of ['ignore','graph-no-queries','graph'])test(`LSP compiler negotiation and navigation: ${mode}`,{timeout:30000},async context=>{
- const f=await fixture();const log=path.join(f.root,'trace');const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
- await server.start(f.root,{path:process.execPath,arguments:[path.resolve('test/fixtures/fake-graph-ablac.mjs'),mode,log]});
+ const f=await fixture();const log=path.join(f.root,'trace');const server=new Server([path.resolve('test/fixtures/fake-graph-ablac.mjs'),mode,log]);context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
+ await server.start(f.root,{path:process.execPath});
  server.notify('textDocument/didOpen',{textDocument:{uri:f.uri,languageId:'abla',version:1,text:f.text}});
  const params={textDocument:{uri:f.uri},position:{line:2,character:18}};
  const definition=await server.request('textDocument/definition',params);assert.equal(definition.error,undefined);assert.equal((definition.result as unknown[]).length,1);
@@ -55,15 +57,15 @@ for(const mode of ['ignore','graph-no-queries','graph'])test(`LSP compiler negot
  }
 });
 test('a compiler without graph analysis (the non-graph mode is gone, #832) is not used: graph-v2, then graph-v1, then syntax mode',{timeout:30000},async context=>{
- const f=await fixture();const log=path.join(f.root,'trace');const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
+ const f=await fixture();const log=path.join(f.root,'trace');const server=new Server([path.resolve('test/fixtures/fake-graph-ablac.mjs'),'reject',log]);context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
  const waiting=server.wait(m=>m.method==='window/logMessage'&&String((m.params as {message?:string})?.message).includes('continuing in syntax mode'));
- const reply=await server.request('initialize',{processId:null,rootUri:pathToFileURL(f.root).href,capabilities:{},initializationOptions:{compiler:{path:process.execPath,arguments:[path.resolve('test/fixtures/fake-graph-ablac.mjs'),'reject',log]}}});assert.equal(reply.error,undefined);server.notify('initialized',{});
+ const reply=await server.request('initialize',{processId:null,rootUri:pathToFileURL(f.root).href,capabilities:{},initializationOptions:{compiler:{path:process.execPath}}});assert.equal(reply.error,undefined);server.notify('initialized',{});
  await waiting;
  const init=(await trace(log)).filter(m=>m.method==='initialize');assert.deepEqual(init.map(m=>m.params.analysisMode),['graph-v2','graph-v1']);
 });
 test('unrelated initialization errors are visible and never silently downgrade',{timeout:30000},async context=>{
- const f=await fixture();const log=path.join(f.root,'trace');const server=new Server();context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
- const reply=await server.request('initialize',{rootUri:pathToFileURL(f.root).href,capabilities:{},initializationOptions:{compiler:{path:process.execPath,arguments:[path.resolve('test/fixtures/fake-graph-ablac.mjs'),'broken',log]}}});assert.equal(reply.error,undefined);server.notify('initialized',{});
+ const f=await fixture();const log=path.join(f.root,'trace');const server=new Server([path.resolve('test/fixtures/fake-graph-ablac.mjs'),'broken',log]);context.after(async()=>{await server.stop().catch(()=>undefined);await fs.rm(f.root,{recursive:true,force:true});});
+ const reply=await server.request('initialize',{rootUri:pathToFileURL(f.root).href,capabilities:{},initializationOptions:{compiler:{path:process.execPath}}});assert.equal(reply.error,undefined);server.notify('initialized',{});
  await server.wait(m=>m.method==='window/logMessage'&&String((m.params as {message?:string})?.message).includes('startup failure stays visible'));
  assert.deepEqual((await trace(log)).filter(m=>m.method==='initialize').map(m=>m.params.analysisMode),['graph-v2']);
 });

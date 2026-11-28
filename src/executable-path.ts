@@ -6,7 +6,9 @@ import path from "node:path";
 // server runs with the workspace as its current directory, so a project could ship its own `ablac.exe` and have it run when
 // the folder is opened. Only absolute PATH entries count (an empty or relative one names the current directory too), and a
 // match inside a workspace folder is passed over. A path the user configured is used as it is when absolute; a relative one,
-// which would also be read against the current directory, is refused.
+// which would also be read against the current directory, is refused. A path the language server was given in its
+// initialization options may come from a project's own editor settings (an editor without a trust prompt), so for it an absolute
+// path inside a workspace folder is refused too (absoluteOutsideWorkspace).
 
 export interface ExecutableSearch {
   /** The platform whose rules apply (process.platform by default). */
@@ -15,6 +17,8 @@ export interface ExecutableSearch {
   readonly environment?: Readonly<Record<string, string | undefined>>;
   /** Workspace folders: a PATH search never returns a file in one of them. */
   readonly workspaceRoots?: readonly string[];
+  /** An absolute path inside a workspace folder is refused as well (it may have been chosen by the project). */
+  readonly absoluteOutsideWorkspace?: boolean;
 }
 
 /** The absolute path `command` runs, or undefined when there is none that may be run (see above). */
@@ -24,9 +28,14 @@ export function resolveExecutable(command: string, search: ExecutableSearch = {}
   const paths = windows ? path.win32 : path.posix;
   const name = command.trim();
   if (name === "") return undefined;
-  if (paths.isAbsolute(name)) return candidates(name, windows).find((file) => runnable(file, windows));
-  if (name.includes("/") || (windows && name.includes("\\"))) return undefined;
   const roots = (search.workspaceRoots ?? []).map((root) => canonical(root, paths));
+  if (paths.isAbsolute(name)) {
+    const file = candidates(name, windows).find((candidate) => runnable(candidate, windows));
+    if (file === undefined || search.absoluteOutsideWorkspace !== true) return file;
+    const real = canonical(file, paths);
+    return roots.some((root) => inside(root, real, paths)) ? undefined : file;
+  }
+  if (name.includes("/") || (windows && name.includes("\\"))) return undefined;
   for (const entry of pathEntries(search.environment ?? process.env, windows)) {
     if (!paths.isAbsolute(entry)) continue;
     for (const file of candidates(joined(entry, name, windows), windows)) {

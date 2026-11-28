@@ -147,6 +147,11 @@ ABLA_COMPILER=/path/to/ablac node dist/src/main.js --stdio
 package, builds the bundled VS Code client, and produces a VSIX under
 `editors/vscode/`. The VSIX contains the server; only `ablac` is external.
 
+An editor may take the initialization options from a project's own settings, so the server treats them as the project's
+choice: a `compiler.path` there must lie outside every workspace folder (after links are resolved), and `compiler.arguments`
+may only be `["analyze", "--stdio"]`. The server's own environment is the user's: `ABLA_COMPILER` names any compiler, and
+`ABLA_COMPILER_ARGUMENTS` (a JSON array) replaces `analyze --stdio`, which the tests use to run a fake compiler.
+
 ## Editor commands
 
 The VS Code extension adds:

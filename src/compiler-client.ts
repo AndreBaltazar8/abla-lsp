@@ -41,6 +41,8 @@ export interface CompilerClientOptions {
   readonly environment?: Readonly<Record<string, string>>;
   /** The workspace folders: a compiler found on PATH inside one is not run. */
   readonly workspaceRoots?: readonly string[];
+  /** An absolute executable inside a workspace folder is not run either (a path from the editor's initialization options). */
+  readonly absoluteOutsideWorkspace?: boolean;
   readonly log?: (message: string) => void;
   readonly onExit?: (error: Error) => void;
 }
@@ -83,8 +85,8 @@ export class CompilerClient {
     this.#sources.clear();
     this.#since = false; this.#held.clear(); this.#heldRevision = undefined; this.#heldFields = undefined;
     const environment = { ...process.env, ...this.#options.environment };
-    const executable = resolveExecutable(this.#options.executable, { environment, workspaceRoots: this.#options.workspaceRoots ?? [] });
-    if (executable === undefined) throw new Error(`compiler ${JSON.stringify(this.#options.executable)} not found: a name is looked up on PATH (absolute entries, outside the workspace), a path must be absolute`);
+    const executable = resolveExecutable(this.#options.executable, { environment, workspaceRoots: this.#options.workspaceRoots ?? [], absoluteOutsideWorkspace: this.#options.absoluteOutsideWorkspace === true });
+    if (executable === undefined) throw new Error(`compiler ${JSON.stringify(this.#options.executable)} not found: a name is looked up on PATH (absolute entries, outside the workspace), a path must be absolute${this.#options.absoluteOutsideWorkspace === true ? " and outside the workspace" : ""}`);
     // On macOS a compiler before 0.2.69 faults at its first freeze: it is started with the freeze off (src/compiler-environment.ts), for every user of this client.
     const platformEnvironment = process.platform === "darwin"
       ? analysisEnvironment(process.platform, compilerVersionText(executable), environment)
