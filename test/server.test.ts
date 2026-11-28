@@ -72,9 +72,12 @@ class LspClient {
   }
 
   async stop(): Promise<void> {
-    await this.request("shutdown", null);
-    this.notify("exit", null);
-    await new Promise<void>((resolve) => this.#child.once("exit", () => resolve()));
+    // A server that already exited answers nothing: waiting on it would hang the test file.
+    if (this.#child.exitCode !== null || this.#child.signalCode !== null) return;
+    const exited = new Promise<void>((resolve) => this.#child.once("exit", () => resolve()));
+    await Promise.race([this.request("shutdown", null), exited]);
+    if (this.#child.exitCode === null && this.#child.signalCode === null) this.notify("exit", null);
+    await exited;
   }
 
   #send(message: RpcMessage): void {
@@ -100,6 +103,16 @@ class LspClient {
       if (message.id !== undefined && message.method === "workspace/applyEdit") {
         this.appliedEdits.push(message.params);
         this.#send({ jsonrpc: "2.0", id: message.id, result: { applied: true } });
+      } else if (message.id !== undefined && message.method !== undefined) {
+        // Another request from the server (a window/showMessageRequest, a progress token): answered as an editor would, and also
+        // offered to the notification waiters by its method.
+        this.#send({ jsonrpc: "2.0", id: message.id, result: null });
+        const waiters = this.#notificationWaiters.get(message.method) ?? [];
+        const matched = waiters.find((waiter) => waiter.matches(message.params));
+        if (matched !== undefined) {
+          waiters.splice(waiters.indexOf(matched), 1);
+          matched.resolve(message.params);
+        }
       } else if (message.id !== undefined) {
         const resolve = this.#pending.get(message.id);
         if (resolve !== undefined) {
@@ -710,6 +723,11 @@ async function canaryCompiler(directory: string, canary: string): Promise<string
   return file;
 }
 
+// Whether the canary compiler was started with analyze --stdio (on macOS the server asks its --version first).
+async function startedWithAnalyze(canary: string): Promise<boolean> {
+  try { return (await fs.readFile(canary, "utf8")).split("\n").includes("analyze --stdio"); } catch { return false; }
+}
+
 async function exists(file: string): Promise<boolean> {
   try { await fs.access(file); return true; } catch { return false; }
 }
@@ -757,8 +775,8 @@ test("compiler arguments other than analyze --stdio are refused, and the compile
   await client.request("initialize", { processId: process.pid, rootUri: pathToFileURL(workspace).href, capabilities: {}, initializationOptions: { compiler: { path: outside, arguments: ["analyze", "--stdio"] } } });
   client.notify("initialized", {});
   const deadline = Date.now() + 10_000;
-  while (!(await exists(canary)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal((await fs.readFile(canary, "utf8")).split("\n")[0], "analyze --stdio");
+  while (!(await startedWithAnalyze(canary)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(await startedWithAnalyze(canary), "the compiler was started with analyze --stdio");
 });
 
 test("the editor's own compiler (ABLA_COMPILER, as the VS Code extension passes its machine-scoped setting) runs from inside the workspace", posixOnly, async (context) => {
@@ -772,6 +790,6 @@ test("the editor's own compiler (ABLA_COMPILER, as the VS Code extension passes 
   await client.request("initialize", { processId: process.pid, rootUri: pathToFileURL(workspace).href, capabilities: {}, initializationOptions: { compiler: {} } });
   client.notify("initialized", {});
   const deadline = Date.now() + 10_000;
-  while (!(await exists(canary)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal((await fs.readFile(canary, "utf8")).split("\n")[0], "analyze --stdio", "the checkout's own build/ablac ran");
+  while (!(await startedWithAnalyze(canary)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(await startedWithAnalyze(canary), "the checkout's own build/ablac ran");
 });
