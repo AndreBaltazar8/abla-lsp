@@ -326,13 +326,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (serverPath !== "" && server === undefined) {
     void vscode.window.showErrorMessage(`Abla: abla.server.path ${serverPath} not found (a name is looked up on PATH outside the workspace); using the bundled server.`);
   }
+  // The compiler goes to the server in its environment (ABLA_COMPILER), not in the initialization options: abla.compiler.path is
+  // machine-scoped, so the editor vouches for it, and the server keeps refusing a path from initialization options that lies inside
+  // the workspace (which another editor may take from the project's own settings). A compiler inside the workspace still runs from here,
+  // as when the ablac checkout itself is open with its build/ablac.
+  const environment = { ...process.env, ABLA_COMPILER: toolPath(compilerPath) ?? compilerPath };
   const serverOptions: ServerOptions = server === undefined
     ? {
         module: context.asAbsolutePath("dist/server.cjs"),
         transport: TransportKind.ipc,
-        options: { cwd: context.extensionPath },
+        options: { cwd: context.extensionPath, env: environment },
       }
-    : { command: server, args: ["--stdio"], options: { cwd: context.extensionPath } };
+    : { command: server, args: ["--stdio"], options: { cwd: context.extensionPath, env: environment } };
   const fileEvents = ["**/*.ab", "**/abla.toml", "**/abla.lock"].map((pattern) =>
     vscode.workspace.createFileSystemWatcher(pattern));
   context.subscriptions.push(...fileEvents);
@@ -340,7 +345,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     documentSelector: [{ scheme: "file", language: "abla" }],
     initializationOptions: () => ({
       inlayHints: { types: vscode.workspace.getConfiguration("abla").get<boolean>("inlayHints.types", true) },
-      compiler: { enabled: compilerEnabled, path: compilerPath, jsonConstruction: vscode.workspace.getConfiguration("abla").get<boolean>("compiler.jsonConstruction", false), regexConstruction: vscode.workspace.getConfiguration("abla").get<boolean>("compiler.regexConstruction", false) },
+      compiler: { enabled: compilerEnabled, jsonConstruction: vscode.workspace.getConfiguration("abla").get<boolean>("compiler.jsonConstruction", false), regexConstruction: vscode.workspace.getConfiguration("abla").get<boolean>("compiler.regexConstruction", false) },
     }),
     synchronize: { configurationSection: "abla", fileEvents },
   };

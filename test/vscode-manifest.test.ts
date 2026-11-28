@@ -30,3 +30,12 @@ test("building and testing from the extension check workspace trust", () => {
   assert.ok(extension.includes("vscode.workspace.isTrusted"));
   assert.ok(debug.includes("vscode.workspace.isTrusted"));
 });
+
+test("the extension gives the server its compiler in the environment, not in the initialization options", () => {
+  const extension = readFileSync(new URL("../../editors/vscode/src/extension.ts", import.meta.url), "utf8");
+  assert.match(extension, /ABLA_COMPILER: toolPath\(compilerPath\)/u, "the machine-scoped path reaches the server as ABLA_COMPILER");
+  assert.equal((extension.match(/env: environment/gu) ?? []).length, 2, "both server launches get it");
+  const options = /initializationOptions: \(\) => \(\{[\s\S]*?\}\),\n/u.exec(extension)?.[0] ?? "";
+  assert.ok(options.includes("compiler: {"), "the initialization options were found");
+  assert.ok(!/\bpath:/u.test(options) && !/arguments:/u.test(options), "no compiler path or arguments in the initialization options");
+});

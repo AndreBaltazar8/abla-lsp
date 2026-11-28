@@ -150,7 +150,9 @@ package, builds the bundled VS Code client, and produces a VSIX under
 An editor may take the initialization options from a project's own settings, so the server treats them as the project's
 choice: a `compiler.path` there must lie outside every workspace folder (after links are resolved), and `compiler.arguments`
 may only be `["analyze", "--stdio"]`. The server's own environment is the user's: `ABLA_COMPILER` names any compiler, and
-`ABLA_COMPILER_ARGUMENTS` (a JSON array) replaces `analyze --stdio`, which the tests use to run a fake compiler.
+`ABLA_COMPILER_ARGUMENTS` (a JSON array) replaces `analyze --stdio`: a test hook, for the tests' fake compilers, not a setting.
+The VS Code extension passes `abla.compiler.path` (machine-scoped) as the server's `ABLA_COMPILER`, so a compiler inside the
+workspace, such as an ablac checkout's own `build/ablac`, still runs from VS Code.
 
 ## Editor commands
 

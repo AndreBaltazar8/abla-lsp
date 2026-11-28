@@ -27,10 +27,10 @@ class LspClient {
   >();
 
   /** A fake compiler's arguments go through the server's environment: initialization options may only give analyze --stdio. */
-  constructor(compilerArguments?: readonly string[]) {
+  constructor(compilerArguments?: readonly string[], environment: Readonly<Record<string, string>> = {}) {
     this.#child = spawn(process.execPath, ["dist/src/main.js", "--stdio"], {
       cwd: process.cwd(),
-      env: { ...process.env, ...(compilerArguments === undefined ? {} : { ABLA_COMPILER_ARGUMENTS: JSON.stringify(compilerArguments) }) },
+      env: { ...process.env, ...environment, ...(compilerArguments === undefined ? {} : { ABLA_COMPILER_ARGUMENTS: JSON.stringify(compilerArguments) }) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.#child.stdout.on("data", (chunk: Buffer) => {
@@ -759,4 +759,19 @@ test("compiler arguments other than analyze --stdio are refused, and the compile
   const deadline = Date.now() + 10_000;
   while (!(await exists(canary)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal((await fs.readFile(canary, "utf8")).split("\n")[0], "analyze --stdio");
+});
+
+test("the editor's own compiler (ABLA_COMPILER, as the VS Code extension passes its machine-scoped setting) runs from inside the workspace", posixOnly, async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "abla-lsp-ed3-"));
+  context.after(async () => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  const canary = path.join(root, "ran");
+  const inside = await canaryCompiler(path.join(workspace, "build"), canary);
+  const client = new LspClient(undefined, { ABLA_COMPILER: inside });
+  context.after(async () => client.stop().catch(() => undefined));
+  await client.request("initialize", { processId: process.pid, rootUri: pathToFileURL(workspace).href, capabilities: {}, initializationOptions: { compiler: {} } });
+  client.notify("initialized", {});
+  const deadline = Date.now() + 10_000;
+  while (!(await exists(canary)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal((await fs.readFile(canary, "utf8")).split("\n")[0], "analyze --stdio", "the checkout's own build/ablac ran");
 });
